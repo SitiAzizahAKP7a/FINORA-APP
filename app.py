@@ -6,6 +6,7 @@ import json
 import os
 import io
 import hashlib
+import time
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -104,7 +105,7 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (GEMINI TERBARU)
+# AI ENGINE (DENGAN RETRY & FALLBACK)
 # ============================================================
 def ask_gemini(prompt, audit_context):
     try:
@@ -112,7 +113,6 @@ def ask_gemini(prompt, audit_context):
         if not api_key:
             return "⚠️ API Key Gemini belum diatur. Silakan tambahkan `GEMINI_API_KEY` di menu Secrets Streamlit."
         
-        # Menggunakan SDK google-genai terbaru
         client = genai.Client(api_key=api_key)
         
         full_prompt = f"""
@@ -128,18 +128,36 @@ def ask_gemini(prompt, audit_context):
         {prompt}
         """
         
-        # Memanggil model gemini-3.8-flash sesuai instruksi error
-        response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=full_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                max_output_tokens=2048,
-            )
-        )
-        return response.text
+        # Sistem Retry: Mencoba 3 kali jika server Google sibuk (503)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Menggunakan model yang tersedia
+                response = client.models.generate_content(
+                    model='gemini-2.0-flash', # Menggunakan 2.0-flash yang lebih stabil dari 3.8
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.7,
+                        max_output_tokens=2048,
+                    )
+                )
+                return response.text
+                
+            except Exception as e:
+                error_msg = str(e)
+                # Jika errornya 503 (Server Sibuk), tunggu 3 detik lalu coba lagi
+                if "503" in error_msg or "UNAVAILABLE" in error_msg:
+                    if attempt < max_retries - 1:
+                        time.sleep(3)
+                        continue # Coba lagi
+                    else:
+                        return "⏳ Server Google AI saat ini sedang sangat sibuk (Error 503). Silakan tunggu 1-2 menit lalu klik 'Kirim ke AI' lagi."
+                else:
+                    # Jika error selain 503 (misal API Key salah), langsung hentikan
+                    return f"Terjadi kesalahan saat menghubungi AI: {error_msg}"
+                    
     except Exception as e:
-        return f"Terjadi kesalahan saat menghubungi AI: {str(e)}"
+        return f"Terjadi kesalahan pada sistem AI: {str(e)}"
 
 # ============================================================
 # SMART AUTO-DETECT COLUMNS
@@ -570,7 +588,6 @@ def page_audit():
                 med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
                 score = min(100, (high_count * 20) + (med_count * 10))
 
-                # SIMPAN HASIL KE SESSION STATE AGAR TIDAK HILANG SAAT DIKLIK
                 st.session_state['audit_results'] = {
                     "findings": all_findings,
                     "flagged": flagged_data,
@@ -580,10 +597,8 @@ def page_audit():
                     "score": score
                 }
                 
-                # Reset chat lama jika ada audit baru
                 st.session_state.ai_chat_history = []
 
-                # Simpan ke Database
                 flagged_json = {k: v.to_dict(orient="records") for k, v in flagged_data.items() if not v.empty}
                 summary_to_save = {
                     "total_findings": len(all_findings), "score": score, 
@@ -594,7 +609,6 @@ def page_audit():
                 save_findings(aid, all_findings)
                 st.success(f"💾 KKA untuk **{entitas}** berhasil diarsipkan (ID #{aid}).")
 
-    # TAMPILKAN HASIL DARI SESSION STATE (JADI TIDAK HILANG SAAT REFRESH)
     if 'audit_results' in st.session_state:
         res = st.session_state['audit_results']
         st.markdown("---")
@@ -649,7 +663,6 @@ def page_simpan():
             findings_df = fetch_findings(aid)
             findings_list = findings_df.to_dict("records")
             
-            # Tampilkan KKA
             render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score)
 
 # ============================================================
