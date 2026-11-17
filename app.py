@@ -85,6 +85,15 @@ def fetch_analyses():
     df = pd.read_sql_query("SELECT a.id, f.filename, a.mode, a.created_at FROM analyses a JOIN files f ON a.file_id = f.id ORDER BY a.created_at DESC", conn)
     conn.close(); return df
 
+def fetch_analysis_by_id(aid):
+    conn = get_conn()
+    df = pd.read_sql_query("""
+        SELECT a.id, a.summary_json, f.filename 
+        FROM analyses a JOIN files f ON a.file_id = f.id 
+        WHERE a.id=?
+    """, conn, params=(aid,))
+    conn.close(); return df.iloc[0] if not df.empty else None
+
 def fetch_findings(aid):
     conn = get_conn()
     df = pd.read_sql_query("SELECT * FROM findings WHERE analysis_id=?", conn, params=(aid,))
@@ -251,14 +260,11 @@ def generate_pdf(findings_list):
 def finora_header(title, subtitle):
     st.markdown(f'<div class="finora-header"><h1>💗 {title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
 
-def render_audit_results(all_findings, flagged_data, uploaded_file, entitas, periode):
+def render_audit_results(all_findings, flagged_data, filename, entitas, periode, score, is_save_view=False):
     if not all_findings:
         st.success("✅ Luar biasa! Tidak ada temuan pelanggaran pada data ini. KKA Bersih.")
         return
 
-    high_count = sum(1 for f in all_findings if f["risk_level"] == "Tinggi")
-    med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
-    score = min(100, (high_count * 20) + (med_count * 10))
     color = "#C62828" if score > 50 else "#EF6C00" if score > 20 else "#2E7D32"
 
     # HEADER KKA
@@ -270,7 +276,7 @@ def render_audit_results(all_findings, flagged_data, uploaded_file, entitas, per
         <table style="width: 100%; font-size: 14px;">
             <tr><td><b>Nama Entitas</b></td><td>: {entitas if entitas else '-'}</td></tr>
             <tr><td><b>Periode Audit</b></td><td>: {periode if periode else '-'}</td></tr>
-            <tr><td><b>Nama File</b></td><td>: {uploaded_file.name}</td></tr>
+            <tr><td><b>Nama File</b></td><td>: {filename}</td></tr>
             <tr><td><b>Tanggal Pemeriksaan</b></td><td>: {datetime.now().strftime('%d %B %Y')}</td></tr>
             <tr><td><b>Skor Risiko</b></td><td>: <span style='color:{color}; font-weight:bold; font-size:18px;'>{score}/100</span></td></tr>
         </table>
@@ -329,7 +335,7 @@ def render_audit_results(all_findings, flagged_data, uploaded_file, entitas, per
 
         st.markdown("---")
         st.markdown("### C. Kesimpulan Auditor")
-        st.warning(f"Berdasarkan pengujian terhadap {len(uploaded_file.getvalue())} bytes data, ditemukan **{len(all_findings)} indikasi masalah**. Kesimpulan: Data memerlukan perbaikan dan verifikasi dokumen lebih lanjut sebelum dapat disajikan sebagai laporan final.")
+        st.warning(f"Ditemukan **{len(all_findings)} indikasi masalah**. Kesimpulan: Data memerlukan perbaikan dan verifikasi dokumen lebih lanjut sebelum dapat disajikan sebagai laporan final.")
         
         st.markdown("### 📥 Download Kertas Kerja Audit")
         col1, col2 = st.columns(2)
@@ -338,10 +344,19 @@ def render_audit_results(all_findings, flagged_data, uploaded_file, entitas, per
         pdf_buffer = generate_pdf(all_findings)
         col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
         
-        fid = save_file(uploaded_file.name, uploaded_file.getvalue())
-        aid = save_analysis(fid, "Audit Profesional", ["audit_v5"], {"total_findings": len(all_findings), "score": score, "entitas": entitas})
-        save_findings(aid, all_findings)
-        st.success(f"💾 KKA untuk **{entitas}** berhasil diarsipkan (ID #{aid}).")
+        # LOGIKA SIMPAN KE DATABASE (Hanya jalan kalau bukan dari menu riwayat)
+        if not is_save_view:
+            # Rekonstruksi dictionary of dataframes ke format JSON agar bisa disimpan
+            flagged_json = {k: v.to_dict(orient="records") for k, v in flagged_data.items() if not v.empty}
+            summary_to_save = {
+                "total_findings": len(all_findings), 
+                "score": score, 
+                "entitas": entitas,
+                "periode": periode,
+                "flagged_data": flagged_json
+            }
+            # (Simpan fungsi ini ada di luar render_audit_results karena butuh akses uploaded_file)
+            return summary_to_save
 
     with tab_grafik:
         c1, c2 = st.columns(2)
@@ -433,8 +448,19 @@ def page_audit():
                     f, flag = audit_overbudget(df, budget_col, amount_col)
                     all_findings.extend(f); flagged_data["Overbudget"] = flag
 
+                high_count = sum(1 for f in all_findings if f["risk_level"] == "Tinggi")
+                med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
+                score = min(100, (high_count * 20) + (med_count * 10))
+
                 st.markdown("---")
-                render_audit_results(all_findings, flagged_data, uploaded, entitas, periode)
+                # Render UI dan ambil data untuk disimpan
+                summary_to_save = render_audit_results(all_findings, flagged_data, uploaded.name, entitas, periode, score, is_save_view=False)
+                
+                if summary_to_save:
+                    fid = save_file(uploaded.name, uploaded.getvalue())
+                    aid = save_analysis(fid, "Audit Profesional", ["audit_v5"], summary_to_save)
+                    save_findings(aid, all_findings)
+                    st.success(f"💾 KKA untuk **{entitas}** berhasil diarsipkan (ID #{aid}).")
 
 def page_dashboard():
     finora_header("Dashboard", "Ringkasan seluruh aktivitas FINORA AI")
@@ -459,17 +485,32 @@ def page_dashboard():
         st.dataframe(recent.head(5), use_container_width=True)
 
 def page_simpan():
-    finora_header("Pusat Laporan & Arsip", "Riwayat analisis dan unduh laporan")
+    finora_header("Pusat Laporan & Arsip", "Riwayat analisis dan Kertas Kerja Audit tersimpan")
     df = fetch_analyses()
     if df.empty:
         st.info("Belum ada riwayat."); return
     st.dataframe(df, use_container_width=True)
     
     st.markdown("---")
-    aid = st.selectbox("Pilih ID Analisis untuk melihat detail", df["id"].tolist())
-    findings = fetch_findings(aid)
-    if not findings.empty:
-        st.dataframe(findings, use_container_width=True)
+    aid = st.selectbox("Pilih ID Analisis untuk membuka KKA lengkap", df["id"].tolist())
+    
+    if aid:
+        an = fetch_analysis_by_id(aid)
+        if an:
+            summary_data = json.loads(an["summary_json"])
+            
+            # Rekonstruksi data
+            entitas = summary_data.get("entitas", "-")
+            periode = summary_data.get("periode", "-")
+            score = summary_data.get("score", 0)
+            raw_flagged = summary_data.get("flagged_data", {})
+            flagged_data = {k: pd.DataFrame(v) for k, v in raw_flagged.items()}
+            
+            findings_df = fetch_findings(aid)
+            findings_list = findings_df.to_dict("records")
+            
+            # Tampilkan KKA Persis Seperti Aslinya
+            render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score, is_save_view=True)
 
 # ============================================================
 # MAIN
