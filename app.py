@@ -19,7 +19,7 @@ from reportlab.lib import colors
 # ============================================================
 # CONFIG & STYLE GLOBAL
 # ============================================================
-st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon="💗", layout="wide")
+st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon="logo.png", layout="wide")
 
 st.markdown("""
 <style>
@@ -588,9 +588,16 @@ def page_landing():
     """, unsafe_allow_html=True)
 
     # Hero Section
+    col_img1, col_img2, col_img3 = st.columns([1, 1.5, 1])
+    with col_img2:
+        # Menggunakan logo.png dengan fallback ke emoji jika gambar belum ada
+        try:
+            st.image("logo.png", use_container_width=True)
+        except Exception:
+            st.markdown("<h1 style='text-align:center; font-size: 5rem;'>💗</h1>", unsafe_allow_html=True)
+
     st.markdown("""
-    <div style="text-align: center; padding: 50px 20px; background: linear-gradient(135deg, #FFF0F4 0%, #FFF5E8 100%); border-radius: 20px; margin-bottom: 40px; border: 2px solid #FF5C8B; box-shadow: 0 10px 30px rgba(255, 92, 139, 0.15);">
-        <div style="font-size: 5rem; margin-bottom: 10px;">💗</div>
+    <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #FFF0F4 0%, #FFF5E8 100%); border-radius: 20px; margin-bottom: 40px; border: 2px solid #FF5C8B; box-shadow: 0 10px 30px rgba(255, 92, 139, 0.15);">
         <h1 style="color: #7A1F3D; font-size: 3.5rem; margin-bottom: 15px; font-weight: 800;">FINORA AI</h1>
         <p style="color: #2D1B24; font-size: 1.3rem; max-width: 800px; margin: 0 auto; line-height: 1.6;">
             Platform Kecerdasan Finansial untuk mendeteksi anomali dan menyusun <b>Kertas Kerja Audit (KKA)</b> secara otomatis dalam hitungan detik.
@@ -842,7 +849,12 @@ def main():
     
     # Jika sudah klik "Start", tampilkan Sidebar dan Aplikasi Utama
     else:
-        st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
+        # Mengganti tulisan 💗 FINORA di sidebar dengan logo
+        try:
+            st.sidebar.image("logo.png", use_container_width=True)
+        except Exception:
+            st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
+            
         st.sidebar.markdown('<p style="text-align:center;font-size:12px;color:#7A1F3D;">Financial Intelligence<br>Platform</p>', unsafe_allow_html=True)
         st.sidebar.markdown("---")
 
