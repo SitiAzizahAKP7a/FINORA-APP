@@ -22,7 +22,6 @@ from reportlab.lib import colors
 # ============================================================
 LOGO_FILENAME = "logo.png"
 
-# Fungsi untuk mengonversi gambar logo ke Base64 agar bisa tampil di HTML
 def get_base64_image(image_path):
     if os.path.exists(image_path):
         with open(image_path, "rb") as img_file:
@@ -401,8 +400,6 @@ def hitung_rasio_dari_nilai(nilai, entity_type):
     return rasio
 
 def get_detailed_insight(ratio_name, val):
-    """Memberikan penjelasan panjang dengan format HTML (tanpa bintang) dan menangani nilai 0."""
-    
     if val == 0 or pd.isna(val):
         if "Pertumbuhan" in ratio_name:
             return "<b>Kondisi:</b> 0% (Tidak Ada Data Pertumbuhan / Stagnan).<br><b>Penyebab:</b> Sistem saat ini hanya memproses data 1 periode (tahun berjalan). Untuk menghitung pertumbuhan (YoY), dibutuhkan data Realisasi Pendapatan Tahun Sebelumnya.<br><b>Dampak:</b> Tidak dapat melihat tren naik/turunnya pendapatan dari tahun ke tahun.<br><b>Rekomendasi:</b> Simpan laporan tahun ini, lalu bandingkan dengan laporan tahun depan. Atau, upload file Excel yang memiliki kolom 'Realisasi Tahun Lalu' agar sistem dapat menghitung rasio pertumbuhan secara otomatis."
@@ -458,7 +455,7 @@ def get_detailed_insight(ratio_name, val):
     return "<b>Analisis:</b> Detail belum tersedia untuk kondisi ini."
 
 # ============================================================
-# EXPORT FUNCTIONS
+# EXPORT FUNCTIONS (AUDIT & FINANCIAL)
 # ============================================================
 def generate_excel(flagged_data_dict, findings_list):
     buffer = io.BytesIO()
@@ -544,11 +541,93 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
     buffer.seek(0)
     return buffer
 
+# --- FUNGSI EXPORT FINANCIAL BARU ---
+def generate_financial_excel(nilai, rasio):
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        # Sheet 1: Data Keuangan
+        df_data = pd.DataFrame(list(nilai.items()), columns=["Komponen", "Nilai (Rp)"])
+        df_data.to_excel(writer, sheet_name="Data Keuangan", index=False)
+        
+        # Sheet 2: Rasio Keuangan
+        df_rasio = pd.DataFrame(list(rasio.items()), columns=["Rasio", "Nilai"])
+        df_rasio.to_excel(writer, sheet_name="Rasio Keuangan", index=False)
+    buffer.seek(0)
+    return buffer
+
+def generate_financial_pdf(nilai, rasio, entity_type, filename):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(name='Title', parent=styles['Heading1'], textColor=colors.HexColor('#7A1F3D'), alignment=1)
+    heading_style = ParagraphStyle(name='Heading', parent=styles['Heading2'], textColor=colors.HexColor('#FF5C8B'))
+    normal_style = styles['Normal']
+    insight_style = ParagraphStyle(name='Insight', parent=styles['Normal'], fontSize=9, leading=14)
+
+    elements.append(Paragraph("LAPORAN ANALISIS KEUANGAN", title_style))
+    elements.append(Paragraph("FINORA Financial Intelligence System", normal_style))
+    elements.append(Spacer(1, 10))
+
+    header_data = [
+        ["Jenis Entitas", f": {entity_type}"],
+        ["Nama File", f": {filename}"],
+        ["Tanggal Analisis", f": {datetime.now().strftime('%d %B %Y')}"]
+    ]
+    t_header = Table(header_data, colWidths=[120, 350])
+    t_header.setStyle(TableStyle([('FONTNAME', (0, 0), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 0), (-1, -1), 10), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
+    elements.append(t_header)
+    elements.append(Spacer(1, 20))
+
+    # Tabel Data Utama
+    elements.append(Paragraph("A. Ringkasan Data Keuangan", heading_style))
+    data_utama = [["Komponen", "Nilai"]]
+    for k, v in nilai.items():
+        if v > 0:
+            data_utama.append([k.replace("_", " ").title(), f"Rp {v:,.0f}"])
+    t_data = Table(data_utama, colWidths=[200, 270])
+    t_data.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF5C8B')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+    ]))
+    elements.append(t_data)
+    elements.append(Spacer(1, 20))
+
+    # Tabel Rasio
+    elements.append(Paragraph("B. Rasio Keuangan", heading_style))
+    data_rasio = [["Rasio", "Nilai"]]
+    for k, v in rasio.items():
+        data_rasio.append([k, f"{v}"])
+    t_rasio = Table(data_rasio, colWidths=[200, 270])
+    t_rasio.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7A1F3D')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+    ]))
+    elements.append(t_rasio)
+    elements.append(Spacer(1, 20))
+
+    # Analisis Mendalam
+    elements.append(Paragraph("C. Analisis & Rekomendasi", heading_style))
+    for k, v in rasio.items():
+        insight_text = get_detailed_insight(k, v)
+        # Bersihkan tag HTML agar bisa dibaca ReportLab
+        insight_text = insight_text.replace("<br>", "<br/>")
+        elements.append(Paragraph(f"<b>{k} ({v})</b>", normal_style))
+        elements.append(Paragraph(insight_text, insight_style))
+        elements.append(Spacer(1, 10))
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
 # ============================================================
 # UI COMPONENTS & KKA RENDER
 # ============================================================
 def finora_header(title, subtitle):
-    # Menggunakan tag HTML <img> untuk menampilkan logo menggantikan emoji love
     logo_html = f'<img src="data:image/png;base64,{LOGO_B64}" style="height: 40px; vertical-align: middle; margin-right: 12px; margin-top: -5px; border-radius: 8px;">' if LOGO_B64 else ''
     st.markdown(f'<div class="finora-header"><h1>{logo_html} {title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
 
@@ -738,7 +817,8 @@ def page_financial_analysis():
                 st.session_state['fin_results'] = {
                     "rasio": rasio, 
                     "nilai": nilai_utama, 
-                    "entity_type": entity_type
+                    "entity_type": entity_type,
+                    "filename": uploaded_fin.name
                 }
 
     # Tampilkan Hasil
@@ -773,25 +853,21 @@ def page_financial_analysis():
                 st.markdown("---")
                 st.markdown("### 📝 Analisis Kondisi & Rekomendasi Mendalam")
                 
-                # 1. Efektivitas
                 st.markdown(f"""<div class="insight-box">
                     <h4>1. Efektivitas Pendapatan ({rasio.get('Efektivitas Pendapatan (%)', 0)}%)</h4>
                     <p>{get_detailed_insight('Efektivitas', rasio.get('Efektivitas Pendapatan (%)', 0))}</p>
                 </div>""", unsafe_allow_html=True)
                 
-                # 2. Efisiensi
                 st.markdown(f"""<div class="insight-box">
                     <h4>2. Efisiensi Belanja ({rasio.get('Efisiensi Belanja (%)', 0)}%)</h4>
                     <p>{get_detailed_insight('Efisiensi', rasio.get('Efisiensi Belanja (%)', 0))}</p>
                 </div>""", unsafe_allow_html=True)
                 
-                # 3. Kemandirian
                 st.markdown(f"""<div class="insight-box">
                     <h4>3. Kemandirian Daerah ({rasio.get('Kemandirian Daerah (%)', 0)}%)</h4>
                     <p>{get_detailed_insight('Kemandirian', rasio.get('Kemandirian Daerah (%)', 0))}</p>
                 </div>""", unsafe_allow_html=True)
 
-                # 4. Pertumbuhan
                 st.markdown(f"""<div class="insight-box">
                     <h4>4. Pertumbuhan Pendapatan ({rasio.get('Pertumbuhan Pendapatan (%)', 0)}%)</h4>
                     <p>{get_detailed_insight('Pertumbuhan', rasio.get('Pertumbuhan Pendapatan (%)', 0))}</p>
@@ -828,6 +904,29 @@ def page_financial_analysis():
                 </div>""", unsafe_allow_html=True)
 
                 st.info("**Catatan:** Untuk analisis Profitabilitas (NPM, ROA, ROE), pastikan angka Laba Bersih sudah sesuai. Jika margin rendah, disarankan untuk menekan biaya operasional (OPEX) dan meningkatkan efisiensi produksi.")
+
+            # --- TOMBOL DOWNLOAD HASIL ANALISIS KEUANGAN ---
+            st.markdown("---")
+            st.markdown("### 📥 Download Laporan Analisis Keuangan")
+            col_dl1, col_dl2 = st.columns(2)
+            
+            fin_excel_buffer = generate_financial_excel(nilai, rasio)
+            col_dl1.download_button(
+                "⬇️ Download Excel (Data & Rasio)", 
+                data=fin_excel_buffer, 
+                file_name=f"Analisis_Keuangan_{res['entity_type'].replace(' / ', '_')}.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+            
+            fin_pdf_buffer = generate_financial_pdf(nilai, rasio, res['entity_type'], res['filename'])
+            col_dl2.download_button(
+                "⬇️ Download PDF Report", 
+                data=fin_pdf_buffer, 
+                file_name=f"Analisis_Keuangan_{res['entity_type'].replace(' / ', '_')}.pdf", 
+                mime="application/pdf",
+                use_container_width=True
+            )
 
         with tab_grafik:
             st.markdown("### Analisis Visual Prospek")
