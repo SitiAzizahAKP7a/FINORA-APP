@@ -92,89 +92,92 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AUDIT ENGINE (UPDATED)
+# AUDIT ENGINE V4 (PROFESSIONAL GRADE)
 # ============================================================
-def audit_duplicates(df, desc_col=None):
+def audit_critical_empty(df, date_col, amount_col, desc_col):
+    """Cek baris yang kosong di kolom vital (Tanggal, Nominal, Deskripsi)"""
     findings, flagged = [], pd.DataFrame()
-    if desc_col and desc_col in df.columns:
-        flagged = df[df.duplicated(subset=[desc_col], keep=False)]
-    else:
-        flagged = df[df.duplicated(keep=False)]
-    if not flagged.empty:
-        findings.append({"module": "Data Duplikat", "risk_level": "Tinggi", "title": f"{len(flagged)} baris data duplikat", "detail": "Terdapat transaksi dengan nilai/deskripsi yang sama persis.", "recommendation": "Lakukan sampling pada baris tersebut."})
+    
+    # Buat mask untuk baris yang salah satu kolom vitalnya kosong
+    masks = []
+    if date_col: masks.append(df[date_col].isna())
+    if amount_col: masks.append(df[amount_col].isna())
+    if desc_col: masks.append(df[desc_col].isna())
+    
+    if masks:
+        combined_mask = masks[0]
+        for m in masks[1:]: combined_mask |= m
+        flagged = df[combined_mask]
+        
+        if not flagged.empty:
+            baris = ", ".join(map(str, (flagged.index + 2).tolist()[:5])) # Ambil 5 index pertama
+            findings.append({
+                "module": "Kelengkapan Data", "risk_level": "Tinggi", 
+                "title": f"{len(flagged)} baris memiliki data vital yang kosong", 
+                "detail": f"Data kosong ditemukan pada baris ke: {baris} (dan lainnya). Tanggal/Nominal/Deskripsi tidak boleh kosong.", 
+                "recommendation": "Minta staf terkait melengkapi data sebelum laporan diproses lebih lanjut."
+            })
     return findings, flagged
 
-def audit_empty(df):
-    findings = []
-    for col in df.columns:
-        cnt = df[col].isna().sum()
-        if cnt > 0:
-            pct = cnt / len(df) * 100
-            if pct > 10:
-                findings.append({"module": "Data Kosong", "risk_level": "Sedang" if pct < 30 else "Tinggi", "title": f"Kolom '{col}' memiliki {cnt} data kosong ({pct:.1f}%)", "detail": "Input data tidak lengkap.", "recommendation": "Minta divisi terkait melengkapi data."})
-    return findings, pd.DataFrame()
+def audit_duplicates(df, date_col, amount_col, desc_col):
+    """Cek duplikat 100% (Tanggal + Nominal + Deskripsi sama)"""
+    findings, flagged = [], pd.DataFrame()
+    subset_cols = [c for c in [date_col, amount_col, desc_col] if c]
+    if subset_cols:
+        flagged = df[df.duplicated(subset=subset_cols, keep=False)]
+        if not flagged.empty:
+            findings.append({"module": "Data Duplikat", "risk_level": "Tinggi", "title": f"{len(flagged)} baris transaksi ganda (100% sama)", "detail": "Terdapat transaksi dengan Tanggal, Nominal, dan Deskripsi yang sama persis.", "recommendation": "Lakukan konfirmasi ke divisi terkait, pastikan bukan input dua kali (double-entry)."})
+    return findings, flagged
+
+def audit_negative(df, amount_col):
+    """Cek nominal minus pada buku kas"""
+    findings, flagged = [], pd.DataFrame()
+    if amount_col:
+        s = pd.to_numeric(df[amount_col], errors="coerce")
+        flagged = df[s < 0]
+        if not flagged.empty:
+            findings.append({"module": "Nominal Negatif", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi bernilai negatif", "detail": "Nilai negatif pada kolom nominal (pemasukan/pengeluaran) menandakan anomali input atau pembalikan jurnal (reversal).", "recommendation": "Pastikan transaksi negatif disertai bukti memo koreksi yang sah."})
+    return findings, flagged
 
 def audit_weekend(df, date_col):
+    """Cek transaksi di hari Sabtu/Minggu"""
     findings, flagged = [], pd.DataFrame()
-    try:
-        dates = pd.to_datetime(df[date_col], errors="coerce")
-        flagged = df[dates.dt.dayofweek >= 5]
-        if not flagged.empty:
-            findings.append({"module": "Transaksi Weekend", "risk_level": "Tinggi", "title": f"{len(flagged)} transaksi di hari Sabtu/Minggu", "detail": "Transaksi di luar hari kerja berisiko tinggi.", "recommendation": "Periksa otorisasi transaksi akhir pekan."})
-    except: pass
-    return findings, flagged
-
-def audit_round_numbers(df, amount_col):
-    findings, flagged = [], pd.DataFrame()
-    try:
-        s = pd.to_numeric(df[amount_col], errors="coerce")
-        # Diubah: minimal 10 Juta dan kelipatan 1 Juta
-        flagged = df[(s >= 10000000) & (s % 1000000 == 0)] 
-        if not flagged.empty:
-            findings.append({
-                "module": "Observasi Nominal Bulat", 
-                "risk_level": "Rendah",
-                "title": f"{len(flagged)} transaksi dengan nominal bulat besar (>= 10 Juta)", 
-                "detail": "Nominal bulat besar tidak selalu salah, namun sering menjadi indikasi estimasi tanpa rincian tagihan.", 
-                "recommendation": "Lakukan uji petik dan minta dokumen pendukung (invoice/kuitansi) untuk memastikan kewajaran."
-            })
-    except: pass
-    return findings, flagged
-
-def audit_outliers_iqr(df, amount_col):
-    findings, flagged = [], pd.DataFrame()
-    try:
-        s = pd.to_numeric(df[amount_col], errors="coerce").dropna()
-        if s.empty: return findings, flagged
-        Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
-        IQR = Q3 - Q1
-        lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-        flagged = df[(pd.to_numeric(df[amount_col], errors="coerce") < lower) | (pd.to_numeric(df[amount_col], errors="coerce") > upper)]
-        if not flagged.empty:
-            findings.append({"module": "Anomali Nominal (Outlier)", "risk_level": "Tinggi", "title": f"{len(flagged)} nilai ekstrem (di luar batas IQR)", "detail": f"Batas wajar: {lower:,.0f} s.d {upper:,.0f}", "recommendation": "Periksa transaksi terbesar/terkecil, pastikan bukan typo."})
-    except: pass
-    return findings, flagged
-
-def audit_balance(df, debit_col, credit_col):
-    findings, flagged = [], pd.DataFrame()
-    try:
-        d = pd.to_numeric(df[debit_col], errors="coerce").fillna(0)
-        c = pd.to_numeric(df[credit_col], errors="coerce").fillna(0)
-        diff = abs(d.sum() - c.sum())
-        if diff > 1:
-            findings.append({"module": "Debit/Kredit", "risk_level": "Tinggi", "title": f"Selisih Debit & Kredit: {diff:,.2f}", "detail": f"Total D: {d.sum():,.2f} | Total K: {c.sum():,.2f}", "recommendation": "Jurnal tidak balance. Periksa kembali entri."})
-    except: pass
+    if date_col:
+        try:
+            dates = pd.to_datetime(df[date_col], errors="coerce")
+            flagged = df[dates.dt.dayofweek >= 5]
+            if not flagged.empty:
+                findings.append({"module": "Transaksi Weekend", "risk_level": "Tinggi", "title": f"{len(flagged)} transaksi di hari Sabtu/Minggu", "detail": "Transaksi di luar hari kerja tanpa otorisasi khusus berisiko tinggi terhadap kecurangan (fraud).", "recommendation": "Periksa bukti persetujuan (approval) dari atasan untuk transaksi akhir pekan."})
+        except: pass
     return findings, flagged
 
 def audit_suspicious_words(df, desc_col):
+    """Cek kata kunci manipulasi"""
     findings, flagged = [], pd.DataFrame()
     keywords = ["adjustment", "adj", "void", "koreksi", "manual", "write-off", "hapus"]
-    try:
-        pattern = '|'.join(keywords)
-        flagged = df[df[desc_col].astype(str).str.lower().str.contains(pattern, na=False)]
-        if not flagged.empty:
-            findings.append({"module": "Kata Kunci Mencurigakan", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi mengandung kata kunci adjustment/void", "detail": "Transaksi manual sering menjadi celah manipulasi.", "recommendation": "Minta penjelasan tertulis dari pembuat jurnal."})
-    except: pass
+    if desc_col:
+        try:
+            pattern = '|'.join(keywords)
+            flagged = df[df[desc_col].astype(str).str.lower().str.contains(pattern, na=False)]
+            if not flagged.empty:
+                findings.append({"module": "Kata Kunci Mencurigakan", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi mengandung kata kunci manipulasi", "detail": "Kata 'adjustment', 'void', atau 'koreksi' pada deskripsi sering menjadi celah manipulasi data.", "recommendation": "Minta penjelasan tertulis beserta dokumen pendukung dari pembuat jurnal."})
+        except: pass
+    return findings, flagged
+
+def audit_outliers_iqr(df, amount_col):
+    """Cek nilai ekstrem statistik"""
+    findings, flagged = [], pd.DataFrame()
+    if amount_col:
+        try:
+            s = pd.to_numeric(df[amount_col], errors="coerce").dropna()
+            if not s.empty:
+                Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
+                IQR = Q3 - Q1
+                lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
+                flagged = df[(pd.to_numeric(df[amount_col], errors="coerce") < lower) | (pd.to_numeric(df[amount_col], errors="coerce") > upper)]
+                if not flagged.empty:
+                    findings.append({"module": "Anomali Nominal (Outlier)", "risk_level": "Tinggi", "title": f"{len(flagged)} nilai ekstrem (di luar batas IQR)", "detail": f"Batas wajar statistik: {lower:,.0f} s.d {upper:,.0f}. Nilai di luar batas ini sangat janggal.", "recommendation": "Lakukan uji petik pada transaksi terbesar/terkecil, pastikan bukan salah ketik (typo)."})
+        except: pass
     return findings, flagged
 
 # ============================================================
@@ -183,11 +186,13 @@ def audit_suspicious_words(df, desc_col):
 def generate_excel(flagged_data_dict, findings_list):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        # Sheet Ringkasan
         df_findings = pd.DataFrame(findings_list)
         if not df_findings.empty:
             df_findings.columns = ["Modul", "Tingkat Risiko", "Judul", "Detail", "Rekomendasi"]
             df_findings.to_excel(writer, sheet_name="Ringkasan Temuan", index=False)
         
+        # Sheet Data Mentah (Bukti Audit)
         for modul, df_flag in flagged_data_dict.items():
             if not df_flag.empty:
                 sheet_name = modul[:31]
@@ -211,7 +216,7 @@ def generate_pdf(findings_list):
     elements.append(Spacer(1, 15))
     
     if not findings_list:
-        elements.append(Paragraph("✅ Tidak ada temuan pelanggaran (High-Level).", normal_style))
+        elements.append(Paragraph("✅ Tidak ada temuan pelanggaran (High-Level). Data relatif bersih.", normal_style))
     else:
         elements.append(Paragraph(f"Ditemukan {len(findings_list)} indikasi masalah:", heading_style))
         elements.append(Spacer(1, 10))
@@ -245,15 +250,16 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
 
     st.markdown(f"<h3>🚨 Skor Risiko Audit: <span style='color:{color}; font-size:36px;'>{score}/100</span></h3>", unsafe_allow_html=True)
     
-    tab_sum, tab_grafik, tab_data = st.tabs(["📝 Daftar Temuan", "📊 Visualisasi Grafik", "📂 Data Terindikasi"])
+    tab_sum, tab_grafik, tab_data = st.tabs(["📝 Kertas Kerja Audit (KKA)", "📊 Visualisasi Grafik", "📂 Data Terindikasi"])
     
     with tab_sum:
+        st.markdown("### 📋 Rincian Temuan Pemeriksaan")
         for f in all_findings:
             with st.expander(f"⚠️ [{f['risk_level']}] {f['title']}"):
-                st.info(f"**Analisis:** {f['detail']}")
+                st.info(f"**Detail Kondisi:** {f['detail']}")
                 st.warning(f"**Rekomendasi Auditor:** {f['recommendation']}")
                 
-        st.markdown("### 📥 Download Laporan Audit")
+        st.markdown("### 📥 Download Kertas Kerja (Working Paper)")
         col1, col2 = st.columns(2)
         
         excel_buffer = generate_excel(flagged_data, all_findings)
@@ -263,38 +269,38 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
         col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
         
         fid = save_file(uploaded_file.name, uploaded_file.getvalue())
-        aid = save_analysis(fid, "Audit Pro", ["audit_v3"], {"total_findings": len(all_findings), "score": score})
+        aid = save_analysis(fid, "Audit Profesional", ["audit_v4"], {"total_findings": len(all_findings), "score": score})
         save_findings(aid, all_findings)
-        st.success(f"💾 Analisis berhasil disimpan ke sistem (ID #{aid}).")
+        st.success(f"💾 Kertas Kerja Audit berhasil diarsipkan (ID #{aid}).")
 
     with tab_grafik:
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**Distribusi Temuan Berdasarkan Risiko**")
+            st.markdown("**Distribusi Tingkat Risiko**")
             risk_df = pd.DataFrame(all_findings)["risk_level"].value_counts().reset_index()
             risk_df.columns = ["Tingkat", "Jumlah"]
             fig_pie = px.pie(risk_df, names="Tingkat", values="Jumlah", color="Tingkat", color_discrete_map={"Tinggi": "#C62828", "Sedang": "#EF6C00", "Rendah": "#2E7D32"}, hole=0.4)
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with c2:
-            st.markdown("**Modul Pengujian yang Terpicu**")
+            st.markdown("**Prosedur Audit yang Menemukan Indikasi**")
             mod_df = pd.DataFrame(all_findings)["module"].value_counts().reset_index()
             mod_df.columns = ["Modul", "Jumlah"]
             fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
             st.plotly_chart(fig_bar, use_container_width=True)
 
     with tab_data:
-        st.markdown("Berikut preview data yang terindikasi bermasalah. (Download file Excel di tab sebelumnya untuk data lengkap).")
+        st.markdown("Berikut adalah *Raw Data* (Data Mentah) yang terindikasi bermasalah. Data ini juga otomatis masuk ke dalam sheet Excel saat kamu mendownloadnya.")
         for modul, df_flag in flagged_data.items():
             if not df_flag.empty:
-                st.markdown(f"**Data Terindikasi: {modul}**")
-                st.dataframe(df_flag.head(10), use_container_width=True)
+                st.markdown(f"**Bukti Data: {modul}**")
+                st.dataframe(df_flag.head(15), use_container_width=True)
 
 # ============================================================
 # PAGES
 # ============================================================
 def page_audit():
-    finora_header("Audit Otomatis Pro", "Pemeriksaan data mendalam, anomali, dan fraud detection")
+    finora_header("Audit Profesional", "Pemeriksaan kelengkapan data, anomali, dan fraud detection")
     
     with st.container():
         st.markdown("### 1. Upload Data")
@@ -328,39 +334,43 @@ def page_audit():
             credit_col = c4.selectbox("Pilih Kolom Kredit", [""] + list(df.columns))
         st.markdown("---")
         
-        st.markdown("### 3. Pilih Pengujian & Jalankan")
-        st.info("Sistem akan memindai data berdasarkan algoritma audit (Outlier, Duplikat, Weekend, dll).")
+        st.markdown("### 3. Prosedur Audit")
+        st.info("Sistem akan menjalankan prosedur pengujian kelengkapan data, duplikasi, transaksi tidak wajar (outlier), dan indikasi manipulasi.")
         
-        if st.button("🚀 JALANKAN AUDIT MENDALAM", use_container_width=True):
-            with st.spinner("Memproses data..."):
+        if st.button("🚀 JALANKAN PROSEDUR AUDIT", use_container_width=True):
+            with st.spinner("Auditor AI sedang memeriksa data..."):
                 all_findings = []
                 flagged_data = {}
                 
-                if desc_col:
-                    f, flag = audit_duplicates(df, desc_col)
-                    all_findings.extend(f); flagged_data["Duplikat"] = flag
-                    
-                f, flag = audit_empty(df)
-                all_findings.extend(f); flagged_data["Data Kosong"] = flag
-                
+                # 1. Uji Kelengkapan Data (Critical Empty)
+                f, flag = audit_critical_empty(df, date_col, amount_col or debit_col, desc_col)
+                all_findings.extend(f); flagged_data["Kelengkapan Kosong"] = flag
+
+                # 2. Uji Duplikasi (Tanggal + Nominal + Desc)
+                f, flag = audit_duplicates(df, date_col, amount_col or debit_col, desc_col)
+                all_findings.extend(f); flagged_data["Duplikasi Ekstrem"] = flag
+
+                # 3. Uji Transaksi Weekend
                 if date_col:
                     f, flag = audit_weekend(df, date_col)
                     all_findings.extend(f); flagged_data["Transaksi Weekend"] = flag
                     
+                # 4. Uji Kata Kunci Manipulasi
                 if desc_col:
                     f, flag = audit_suspicious_words(df, desc_col)
                     all_findings.extend(f); flagged_data["Kata Kunci"] = flag
 
+                # 5. Uji Spesifik Format
                 if amount_col:
-                    f, flag = audit_round_numbers(df, amount_col)
-                    all_findings.extend(f); flagged_data["Nominal Bulat"] = flag
+                    f, flag = audit_negative(df, amount_col)
+                    all_findings.extend(f); flagged_data["Nominal Negatif"] = flag
                     
                     f, flag = audit_outliers_iqr(df, amount_col)
                     all_findings.extend(f); flagged_data["Outlier IQR"] = flag
                     
                 if debit_col and credit_col:
-                    f, flag = audit_balance(df, debit_col, credit_col)
-                    all_findings.extend(f); flagged_data["Debit Kredit"] = flag
+                    # (Opsional: logika balance D/C bisa ditambahkan di sini)
+                    pass
 
                 st.markdown("---")
                 render_audit_results(all_findings, flagged_data, uploaded)
@@ -408,13 +418,13 @@ def main():
     st.sidebar.markdown('<p style="text-align:center;font-size:12px;color:#7A1F3D;">Financial Intelligence<br>Platform</p>', unsafe_allow_html=True)
     st.sidebar.markdown("---")
     
-    nav = st.sidebar.radio("Navigasi", ["Dashboard", "Audit Pro", "Simpan"])
+    nav = st.sidebar.radio("Navigasi", ["Dashboard", "Audit Profesional", "Simpan"])
     
     st.sidebar.markdown("---")
     st.sidebar.caption("⚠️ Temuan bersifat indikasi dan perlu verifikasi dokumen fisik.")
     
     if nav == "Dashboard": page_dashboard()
-    elif nav == "Audit Pro": page_audit()
+    elif nav == "Audit Profesional": page_audit()
     elif nav == "Simpan": page_simpan()
 
 if __name__ == "__main__":
