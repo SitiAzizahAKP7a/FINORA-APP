@@ -483,20 +483,28 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
         if "ai_messages" not in st.session_state:
             st.session_state.ai_messages = []
             
+        # Kotak Input Manual (Dijamin Muncul)
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            prompt = st.text_input("Tulis pertanyaan Anda di sini...", key=f"ai_prompt_{filename}")
+        with c2:
+            st.write("") # Spasi biar tombol sejajar
+            st.write("")
+            kirim = st.button("Kirim ke AI", use_container_width=True)
+            
+        if kirim and prompt:
+            # Simpan pertanyaan user
+            st.session_state.ai_messages.append({"role": "user", "content": prompt})
+            # Minta jawaban ke AI
+            with st.spinner("FINORA AI sedang menganalisis..."):
+                response = ask_gemini(prompt, context_text)
+            st.session_state.ai_messages.append({"role": "assistant", "content": response})
+            st.rerun() # Refresh halaman agar chat langsung muncul
+
+        # Tampilkan Riwayat Chat
         for msg in st.session_state.ai_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
-                
-        if prompt := st.chat_input("Tanya AI tentang hasil audit ini..."):
-            st.session_state.ai_messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-                
-            with st.chat_message("assistant"):
-                with st.spinner("FINORA AI sedang menganalisis..."):
-                    response = ask_gemini(prompt, context_text)
-                    st.markdown(response)
-            st.session_state.ai_messages.append({"role": "assistant", "content": response})
 
 # ============================================================
 # PAGES
