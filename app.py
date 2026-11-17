@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 
 # Library untuk PDF
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -92,11 +92,10 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AUDIT ENGINE V3 (DEEP SCAN & FLAGGED DATA)
+# AUDIT ENGINE (UPDATED)
 # ============================================================
 def audit_duplicates(df, desc_col=None):
-    findings = []
-    flagged = pd.DataFrame()
+    findings, flagged = [], pd.DataFrame()
     if desc_col and desc_col in df.columns:
         flagged = df[df.duplicated(subset=[desc_col], keep=False)]
     else:
@@ -129,7 +128,7 @@ def audit_round_numbers(df, amount_col):
     findings, flagged = [], pd.DataFrame()
     try:
         s = pd.to_numeric(df[amount_col], errors="coerce")
-        flagged = df[(s >= 5000000) & (s % 5000000 == 0)] # Diubah jadi >= 5 Juta
+        flagged = df[(s >= 5000000) & (s % 5000000 == 0)]
         if not flagged.empty:
             findings.append({"module": "Angka Bulat Mencurigakan", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi nominal bulat besar (>= 5 Juta)", "detail": "Nominal bulat besar sering digunakan untuk estimasi/mark-up.", "recommendation": "Cocokkan dengan invoice asli."})
     except: pass
@@ -156,17 +155,7 @@ def audit_balance(df, debit_col, credit_col):
         c = pd.to_numeric(df[credit_col], errors="coerce").fillna(0)
         diff = abs(d.sum() - c.sum())
         if diff > 1:
-            findings.append({"module": "Debit/Kredit", "risk_level": "Tinggi", "title": f"Selisih Debit & Kredit: {diff:,.2f}", "detail": f"Total D: {d.sum():,.2f} | Total K: {c.sum():,.2f}", "recommendation": "Jurnal tidak balance."})
-    except: pass
-    return findings, flagged
-
-def audit_negative_values(df, amount_col):
-    findings, flagged = [], pd.DataFrame()
-    try:
-        s = pd.to_numeric(df[amount_col], errors="coerce")
-        flagged = df[s < 0]
-        if not flagged.empty:
-            findings.append({"module": "Nominal Negatif", "risk_level": "Tinggi", "title": f"{len(flagged)} transaksi bernilai negatif", "detail": "Nominal negatif pada kolom pengeluaran/pemasukan bisa jadi indikasi reversal atau error.", "recommendation": "Verifikasi apakah transaksi pembalik (void) atau salah input."})
+            findings.append({"module": "Debit/Kredit", "risk_level": "Tinggi", "title": f"Selisih Debit & Kredit: {diff:,.2f}", "detail": f"Total D: {d.sum():,.2f} | Total K: {c.sum():,.2f}", "recommendation": "Jurnal tidak balance. Periksa kembali entri."})
     except: pass
     return findings, flagged
 
@@ -177,7 +166,7 @@ def audit_suspicious_words(df, desc_col):
         pattern = '|'.join(keywords)
         flagged = df[df[desc_col].astype(str).str.lower().str.contains(pattern, na=False)]
         if not flagged.empty:
-            findings.append({"module": "Kata Kunci Mencurigakan", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi mengandung kata kunci adjustment/void", "detail": "Transaksi manual atau penyesuaian sering menjadi celah manipulasi.", "recommendation": "Minta penjelasan tertulis dari pembuat jurnal."})
+            findings.append({"module": "Kata Kunci Mencurigakan", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi mengandung kata kunci adjustment/void", "detail": "Transaksi manual sering menjadi celah manipulasi.", "recommendation": "Minta penjelasan tertulis dari pembuat jurnal."})
     except: pass
     return findings, flagged
 
@@ -187,16 +176,14 @@ def audit_suspicious_words(df, desc_col):
 def generate_excel(flagged_data_dict, findings_list):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Sheet 1: Ringkasan Temuan
         df_findings = pd.DataFrame(findings_list)
         if not df_findings.empty:
             df_findings.columns = ["Modul", "Tingkat Risiko", "Judul", "Detail", "Rekomendasi"]
             df_findings.to_excel(writer, sheet_name="Ringkasan Temuan", index=False)
         
-        # Sheet 2 dst: Data Mentah yang Bermasalah
         for modul, df_flag in flagged_data_dict.items():
             if not df_flag.empty:
-                sheet_name = modul[:31] # Excel max 31 chars
+                sheet_name = modul[:31]
                 df_flag.to_excel(writer, sheet_name=sheet_name, index=False)
                 
     buffer.seek(0)
@@ -207,13 +194,11 @@ def generate_pdf(findings_list):
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     elements = []
     
-    # Styles
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(name='Title', parent=styles['Heading1'], textColor=colors.HexColor('#7A1F3D'), alignment=1)
     heading_style = ParagraphStyle(name='Heading', parent=styles['Heading2'], textColor=colors.HexColor('#FF5C8B'))
     normal_style = styles['Normal']
     
-    # Title
     elements.append(Paragraph("Laporan Hasil Audit FINORA", title_style))
     elements.append(Paragraph(f"Tanggal Cetak: {datetime.now().strftime('%d %B %Y %H:%M')}", normal_style))
     elements.append(Spacer(1, 15))
@@ -225,7 +210,6 @@ def generate_pdf(findings_list):
         elements.append(Spacer(1, 10))
         
         for i, f in enumerate(findings_list):
-            # Kotak per temuan
             elements.append(Paragraph(f"<b>{i+1}. [{f['risk_level']}] {f['title']}</b>", normal_style))
             elements.append(Paragraph(f"<i>Modul: {f['module']}</i>", normal_style))
             elements.append(Paragraph(f"Analisis: {f['detail']}", normal_style))
@@ -247,7 +231,6 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
         st.success("✅ Luar biasa! Tidak ada temuan anomali pada data ini.")
         return
 
-    # 1. Hitung Skor Risiko
     high_count = sum(1 for f in all_findings if f["risk_level"] == "Tinggi")
     med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
     score = min(100, (high_count * 20) + (med_count * 10))
@@ -255,8 +238,7 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
 
     st.markdown(f"<h3>🚨 Skor Risiko Audit: <span style='color:{color}; font-size:36px;'>{score}/100</span></h3>", unsafe_allow_html=True)
     
-    # 2. Tabs untuk Hasil
-    tab_sum, tab_grafik, tab_data, tab_ai = st.tabs(["📝 Daftar Temuan", "📊 Visualisasi Grafik", "📂 Data Terindikasi", "🤖 Rekomendasi AI"])
+    tab_sum, tab_grafik, tab_data = st.tabs(["📝 Daftar Temuan", "📊 Visualisasi Grafik", "📂 Data Terindikasi"])
     
     with tab_sum:
         for f in all_findings:
@@ -264,31 +246,15 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
                 st.info(f"**Analisis:** {f['detail']}")
                 st.warning(f"**Rekomendasi Auditor:** {f['recommendation']}")
                 
-        # Tombol Export
         st.markdown("### 📥 Download Laporan Audit")
         col1, col2 = st.columns(2)
         
-        # Excel Download
         excel_buffer = generate_excel(flagged_data, all_findings)
-        col1.download_button(
-            label="⬇️ Download Excel (Multi-Sheet)",
-            data=excel_buffer,
-            file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        col1.download_button("⬇️ Download Excel (Multi-Sheet)", data=excel_buffer, file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         
-        # PDF Download
         pdf_buffer = generate_pdf(all_findings)
-        col2.download_button(
-            label="⬇️ Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
+        col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
         
-        # Simpan DB
         fid = save_file(uploaded_file.name, uploaded_file.getvalue())
         aid = save_analysis(fid, "Audit Pro", ["audit_v3"], {"total_findings": len(all_findings), "score": score})
         save_findings(aid, all_findings)
@@ -296,17 +262,13 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
 
     with tab_grafik:
         c1, c2 = st.columns(2)
-        # Grafik 1: Distribusi Risiko
         with c1:
             st.markdown("**Distribusi Temuan Berdasarkan Risiko**")
             risk_df = pd.DataFrame(all_findings)["risk_level"].value_counts().reset_index()
             risk_df.columns = ["Tingkat", "Jumlah"]
-            fig_pie = px.pie(risk_df, names="Tingkat", values="Jumlah", color="Tingkat",
-                             color_discrete_map={"Tinggi": "#C62828", "Sedang": "#EF6C00", "Rendah": "#2E7D32"},
-                             hole=0.4)
+            fig_pie = px.pie(risk_df, names="Tingkat", values="Jumlah", color="Tingkat", color_discrete_map={"Tinggi": "#C62828", "Sedang": "#EF6C00", "Rendah": "#2E7D32"}, hole=0.4)
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        # Grafik 2: Bar Chart Modul
         with c2:
             st.markdown("**Modul Pengujian yang Terpicu**")
             mod_df = pd.DataFrame(all_findings)["module"].value_counts().reset_index()
@@ -315,17 +277,11 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
             st.plotly_chart(fig_bar, use_container_width=True)
 
     with tab_data:
-        st.markdown("Silakan unduh file Excel di tab sebelumnya untuk melihat data secara lengkap. Berikut preview data yang terindikasi bermasalah:")
+        st.markdown("Berikut preview data yang terindikasi bermasalah. (Download file Excel di tab sebelumnya untuk data lengkap).")
         for modul, df_flag in flagged_data.items():
             if not df_flag.empty:
                 st.markdown(f"**Data Terindikasi: {modul}**")
                 st.dataframe(df_flag.head(10), use_container_width=True)
-
-    with tab_ai:
-        st.markdown("Gunakan asisten FINORA AI untuk membedah hasil audit ini lebih dalam.")
-        q = st.text_input("Tanyakan sesuatu tentang hasil audit ini (Contoh: Mengapa ada transaksi weekend?):")
-        if st.button("Tanya AI"):
-            st.info("Fitur AI memerlukan konfigurasi API Key (segera hadir dalam pembaruan).")
 
 # ============================================================
 # PAGES
@@ -342,15 +298,29 @@ def page_audit():
     if uploaded:
         df = pd.read_excel(uploaded, header=header_row) if uploaded.name.endswith('xlsx') else pd.read_csv(uploaded, header=header_row)
         
-        st.markdown("### 2. Pemetaan Kolom (Wajib)")
-        c1, c2, c3 = st.columns(3)
-        date_col = c1.selectbox("Pilih Kolom Tanggal", [""] + list(df.columns))
-        amount_col = c2.selectbox("Pilih Kolom Nominal", [""] + list(df.columns))
-        desc_col = c3.selectbox("Pilih Kolom Deskripsi", [""] + list(df.columns))
+        st.markdown("### 2. Format Laporan & Pemetaan Kolom")
         
-        c4, c5 = st.columns(2)
-        debit_col = c4.selectbox("Pilih Kolom Debit (Opsional)", [""] + list(df.columns))
-        credit_col = c5.selectbox("Pilih Kolom Kredit (Opsional)", [""] + list(df.columns))
+        # FITUR BARU: Pilihan Format Laporan
+        format_laporan = st.radio(
+            "Pilih format laporan Excel kamu:",
+            ["Buku Kas / Bank (Hanya 1 Kolom Nominal)", "Jurnal Umum / Neraca Saldo (Ada Debit & Kredit Terpisah)"],
+            horizontal=True
+        )
+        
+        c1, c2 = st.columns(2)
+        date_col = c1.selectbox("Pilih Kolom Tanggal", [""] + list(df.columns))
+        desc_col = c2.selectbox("Pilih Kolom Deskripsi", [""] + list(df.columns))
+        
+        amount_col, debit_col, credit_col = None, None, None
+        
+        st.markdown("---")
+        if "Buku Kas" in format_laporan:
+            amount_col = st.selectbox("Pilih Kolom Nominal (Pemasukan/Pengeluaran)", [""] + list(df.columns))
+        else:
+            c3, c4 = st.columns(2)
+            debit_col = c3.selectbox("Pilih Kolom Debit", [""] + list(df.columns))
+            credit_col = c4.selectbox("Pilih Kolom Kredit", [""] + list(df.columns))
+        st.markdown("---")
         
         st.markdown("### 3. Pilih Pengujian & Jalankan")
         st.info("Sistem akan memindai data berdasarkan algoritma audit (Outlier, Duplikat, Weekend, dll).")
@@ -360,7 +330,7 @@ def page_audit():
                 all_findings = []
                 flagged_data = {}
                 
-                # Jalankan fungsi audit
+                # Audit Umum
                 if desc_col:
                     f, flag = audit_duplicates(df, desc_col)
                     all_findings.extend(f); flagged_data["Duplikat"] = flag
@@ -372,6 +342,11 @@ def page_audit():
                     f, flag = audit_weekend(df, date_col)
                     all_findings.extend(f); flagged_data["Transaksi Weekend"] = flag
                     
+                if desc_col:
+                    f, flag = audit_suspicious_words(df, desc_col)
+                    all_findings.extend(f); flagged_data["Kata Kunci"] = flag
+
+                # Audit Spesifik Berdasarkan Format
                 if amount_col:
                     f, flag = audit_round_numbers(df, amount_col)
                     all_findings.extend(f); flagged_data["Nominal Bulat"] = flag
@@ -379,16 +354,9 @@ def page_audit():
                     f, flag = audit_outliers_iqr(df, amount_col)
                     all_findings.extend(f); flagged_data["Outlier IQR"] = flag
                     
-                    f, flag = audit_negative_values(df, amount_col)
-                    all_findings.extend(f); flagged_data["Nominal Negatif"] = flag
-                    
                 if debit_col and credit_col:
                     f, flag = audit_balance(df, debit_col, credit_col)
                     all_findings.extend(f); flagged_data["Debit Kredit"] = flag
-                    
-                if desc_col:
-                    f, flag = audit_suspicious_words(df, desc_col)
-                    all_findings.extend(f); flagged_data["Kata Kunci"] = flag
 
                 # Render Hasil
                 st.markdown("---")
