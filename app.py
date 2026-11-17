@@ -34,9 +34,36 @@ h1, h2, h3 { color: var(--finora-burgundy); }
 .finora-header { background: linear-gradient(135deg, #FF5C8B 0%, #7A1F3D 100%); color: white; padding: 24px; border-radius: 16px; margin-bottom: 20px; }
 .finora-header h1 { color: white; margin: 0; font-size: 30px; }
 .finora-header p  { color: #FFF0F4; margin: 6px 0 0 0; }
-div[data-testid="stMetric"] { background: white; padding: 16px; border-radius: 12px; border-left: 4px solid #FF5C8B; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+/* CSS Khusus Kartu Metrik Kustom */
+.metric-card {
+    background: white;
+    padding: 16px;
+    border-radius: 12px;
+    border-left: 4px solid #FF5C8B;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    margin-bottom: 15px;
+}
+.metric-card p { color: #555; font-size: 14px; margin: 0; font-weight: 600; }
+.metric-card h3 { color: #7A1F3D; margin: 5px 0 0 0; font-size: 24px; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
+
+# ============================================================
+# FUNGSI PEMBANTU FORMAT ANGKA & KARTU
+# ============================================================
+def format_rupiah(val):
+    if abs(val) >= 1_000_000_000_000: return f"Rp {val/1_000_000_000_000:,.2f} T"
+    elif abs(val) >= 1_000_000_000: return f"Rp {val/1_000_000_000:,.2f} M"
+    elif abs(val) >= 1_000_000: return f"Rp {val/1_000_000:,.2f} Jt"
+    else: return f"Rp {val:,.0f}"
+
+def metric_card(label, value, help_text=""):
+    st.markdown(f"""
+    <div class="metric-card" title="{help_text}">
+        <p>{label}</p>
+        <h3>{value}</h3>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ============================================================
 # DATABASE
@@ -249,7 +276,7 @@ def audit_outliers_iqr(df, amount_col):
     return findings, flagged
 
 # ============================================================
-# SMART FINANCIAL ENGINE (DIPERBARUI DENGAN TEXT CLEANING)
+# SMART FINANCIAL ENGINE
 # ============================================================
 def auto_extract_financials(df, entity_type):
     results = {
@@ -267,7 +294,6 @@ def auto_extract_financials(df, entity_type):
 
     name_col = str_cols[0] 
     
-    # Deteksi Kolom Realisasi & Anggaran
     real_col, ang_col = None, None
     for c in num_cols:
         c_str = str(c).lower()
@@ -277,53 +303,39 @@ def auto_extract_financials(df, entity_type):
     if not real_col and len(num_cols) > 0: real_col = num_cols[0]
     if not ang_col and len(num_cols) > 1: ang_col = num_cols[1]
 
-    # PEMBERSIHAN TEKS: Mengubah jadi huruf kecil & membuang angka/titik
-    # Contoh: "1. PENDAPATAN DAERAH" -> "pendapatan daerah"
     clean_names = df[name_col].astype(str).str.lower().str.replace(r'[^a-z\s]', '', regex=True).str.strip()
 
     def get_total(target_col, exact_keys, contains_keys=[]):
         if not target_col: return 0.0
-        # 1. Coba cari yang EXACT MATCH (Teksnya persis sama)
         if exact_keys:
             mask_exact = clean_names.isin(exact_keys)
             if mask_exact.any():
                 return pd.to_numeric(df.loc[mask_exact, target_col], errors='coerce').fillna(0).sum()
-        
-        # 2. Coba cari yang MENGANDUNG kata kunci
         if contains_keys:
             mask_contains = clean_names.str.contains('|'.join(contains_keys), na=False)
             if mask_contains.any():
                 return pd.to_numeric(df.loc[mask_contains, target_col], errors='coerce').fillna(0).sum()
-        
         return 0.0
 
     if "Pemerintahan" in entity_type:
-        # --- LOGIKA PEMERINTAHAN (APBD) ---
         # Pendapatan
         real_p = get_total(real_col, ['total pendapatan', 'jumlah pendapatan', 'pendapatan daerah', 'pendapatan'])
-        if real_p == 0:
-            real_p = get_total(real_col, [], ['pendapatan asli daerah', 'dana perimbangan', 'dana transfer', 'lainlain pendapatan'])
-            
+        if real_p == 0: real_p = get_total(real_col, [], ['pendapatan asli daerah', 'dana perimbangan', 'dana transfer', 'lainlain pendapatan'])
         ang_p = get_total(ang_col, ['total pendapatan', 'jumlah pendapatan', 'pendapatan daerah', 'pendapatan'])
-        if ang_p == 0:
-            ang_p = get_total(ang_col, [], ['pendapatan asli daerah', 'dana perimbangan', 'dana transfer', 'lainlain pendapatan'])
+        if ang_p == 0: ang_p = get_total(ang_col, [], ['pendapatan asli daerah', 'dana perimbangan', 'dana transfer', 'lainlain pendapatan'])
 
         # Belanja
         real_b = get_total(real_col, ['total belanja', 'jumlah belanja', 'belanja daerah', 'belanja'])
-        if real_b == 0:
-            real_b = get_total(real_col, [], ['belanja operasi', 'belanja modal', 'belanja tak terduga'])
-            
+        if real_b == 0: real_b = get_total(real_col, [], ['belanja operasi', 'belanja modal', 'belanja tak terduga'])
         ang_b = get_total(ang_col, ['total belanja', 'jumlah belanja', 'belanja daerah', 'belanja'])
-        if ang_b == 0:
-            ang_b = get_total(ang_col, [], ['belanja operasi', 'belanja modal', 'belanja tak terduga'])
+        if ang_b == 0: ang_b = get_total(ang_col, [], ['belanja operasi', 'belanja modal', 'belanja tak terduga'])
 
-        # PAD
-        pad = get_total(real_col, [], ['pendapatan asli daerah', 'pad'])
+        # PAD (Pendapatan Asli Daerah) - Pencarian lebih agresif
+        pad = get_total(real_col, ['pendapatan asli daerah', 'jumlah pendapatan asli daerah', 'total pendapatan asli daerah', 'pad'], ['pendapatan asli daerah'])
 
         # Surplus
         surplus = get_total(real_col, [], ['surplus', 'defisit'])
-        if surplus == 0:
-            surplus = real_p - real_b
+        if surplus == 0: surplus = real_p - real_b
 
         results.update({
             "real_pendapatan": real_p, "ang_pendapatan": ang_p,
@@ -332,7 +344,6 @@ def auto_extract_financials(df, entity_type):
         })
 
     else:
-        # --- LOGIKA PERUSAHAAN ---
         results["pendapatan"] = get_total(real_col, ['total pendapatan', 'pendapatan', 'total penjualan', 'penjualan'], ['pendapatan', 'penjualan', 'revenue'])
         results["laba"] = get_total(real_col, ['laba bersih', 'laba tahun berjalan'], ['laba bersih', 'net income'])
         results["total_aset"] = get_total(real_col, ['total aset', 'jumlah aset'], ['total aset', 'total asset'])
@@ -345,7 +356,6 @@ def auto_extract_financials(df, entity_type):
 
 def hitung_rasio_dari_nilai(nilai, entity_type):
     rasio = {}
-    
     if "Pemerintahan" in entity_type:
         real_p = nilai.get("real_pendapatan", 0)
         ang_p = nilai.get("ang_pendapatan", 0)
@@ -357,7 +367,6 @@ def hitung_rasio_dari_nilai(nilai, entity_type):
         rasio["Efisiensi Belanja (%)"] = round((real_b / ang_b) * 100, 2) if ang_b > 0 else 0.0
         rasio["Kemandirian Daerah (%)"] = round((pad / real_p) * 100, 2) if real_p > 0 else 0.0
         rasio["Pertumbuhan Pendapatan (%)"] = 0.0 
-        
     else:
         pendapatan = nilai.get("pendapatan", 0)
         laba = nilai.get("laba", 0)
@@ -372,8 +381,23 @@ def hitung_rasio_dari_nilai(nilai, entity_type):
         rasio["ROA (%)"] = round((laba / total_aset) * 100, 2) if total_aset > 0 else 0.0
         rasio["ROE (%)"] = round((laba / ekuitas) * 100, 2) if ekuitas > 0 else 0.0
         rasio["Debt to Equity (x)"] = round(total_liab / ekuitas, 2) if ekuitas > 0 else 0.0
-    
     return rasio
+
+def get_ratio_insight(ratio_name, val):
+    """Memberikan penjelasan, penyebab, dan rekomendasi berdasarkan nilai rasio."""
+    if "Efektivitas" in ratio_name:
+        if val >= 100: return "**Sangat Baik.** Target pendapatan tercapai atau terlampaui. **Saran:** Pertahankan kinerja dan eksplorasi sumber pendapatan baru."
+        elif val >= 90: return "**Baik.** Target hampir tercapai. **Saran:** Tingkatkan pengawasan kepatuhan wajib pajak/retribusi."
+        else: return "**Kurang.** Target tidak tercapai. **Sebab:** Potensi penurunan ekonomi atau wajib pajak mangkir. **Saran:** Lakukan intensifikasi (pemeriksaan pajak) dan ekstensifikasi (subjek pajak baru)."
+    elif "Efisiensi" in ratio_name:
+        if val > 100: return "**Kurang Efisien (Overbudget).** Realisasi belanja melebihi anggaran. **Saran:** Evaluasi ulang perencanaan anggaran dan lakukan penghematan pada belanja non-prioritas."
+        elif val >= 90: return "**Sangat Efisien.** Penyerapan anggaran sesuai target. **Saran:** Pastikan output program/kegiatan benar-benar dirasakan manfaatnya oleh masyarakat."
+        else: return "**Penyerapan Rendah.** Anggaran tidak terserap maksimal. **Sebab:** Keterlambatan pengadaan atau program belum berjalan. **Saran:** Percepat proses tender dan eksekusi program agar target pembangunan tidak tertunda."
+    elif "Kemandirian" in ratio_name:
+        if val >= 50: return "**Mandiri.** PAD mendominasi pendapatan. **Saran:** Kembangkan BUMD dan investasi daerah untuk memperkuat struktur fiskal."
+        elif val >= 25: return "**Sedang.** Masih bergantung pada transfer pusat. **Saran:** Gali potensi PAD baru dari sektor pariwisata, pajak reklame, atau retribusi daerah."
+        else: return "**Rendah (Tergantung Transfer).** Sangat bergantung pada dana pusat. **Sebab:** Basis pajak/retribusi lokal yang kecil. **Saran:** Lakukan reformasi perpajakan daerah dan ciptakan iklim investasi yang ramah."
+    return ""
 
 # ============================================================
 # EXPORT FUNCTIONS
@@ -672,51 +696,54 @@ def page_financial_analysis():
             
             if is_pemda:
                 # Tampilan Khusus APBD
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Realisasi Pendapatan", f"Rp {nilai.get('real_pendapatan', 0):,.0f}")
-                m2.metric("Realisasi Belanja", f"Rp {nilai.get('real_belanja', 0):,.0f}")
-                m3.metric("Surplus / Defisit", f"Rp {nilai.get('surplus', 0):,.0f}")
-                m4.metric("Pendapatan Asli Daerah (PAD)", f"Rp {nilai.get('pad', 0):,.0f}")
+                c1, c2, c3, c4 = st.columns(4)
+                with c1: metric_card("Realisasi Pendapatan", format_rupiah(nilai.get('real_pendapatan', 0)))
+                with c2: metric_card("Realisasi Belanja", format_rupiah(nilai.get('real_belanja', 0)))
+                with c3: metric_card("Surplus / Defisit", format_rupiah(nilai.get('surplus', 0)))
+                with c4: metric_card("Pendapatan Asli Daerah", format_rupiah(nilai.get('pad', 0)))
                 
                 st.markdown("#### Rasio Keuangan Sektor Publik")
                 r1, r2, r3, r4 = st.columns(4)
-                r1.metric("Efektivitas Pendapatan", f"{rasio.get('Efektivitas Pendapatan (%)', 0)} %", help="Rumus: (Realisasi Pendapatan / Anggaran Pendapatan) x 100%")
-                r2.metric("Efisiensi Belanja", f"{rasio.get('Efisiensi Belanja (%)', 0)} %", help="Rumus: (Realisasi Belanja / Anggaran Belanja) x 100%")
-                r3.metric("Kemandirian Daerah", f"{rasio.get('Kemandirian Daerah (%)', 0)} %", help="Rumus: (PAD / Realisasi Pendapatan) x 100%")
-                r4.metric("Pertumbuhan Pendapatan", f"{rasio.get('Pertumbuhan Pendapatan (%)', 0)} %", help="Butuh data tahun sebelumnya untuk menghitung YoY.")
+                with r1: metric_card("Efektivitas Pendapatan", f"{rasio.get('Efektivitas Pendapatan (%)', 0)} %")
+                with r2: metric_card("Efisiensi Belanja", f"{rasio.get('Efisiensi Belanja (%)', 0)} %")
+                with r3: metric_card("Kemandirian Daerah", f"{rasio.get('Kemandirian Daerah (%)', 0)} %")
+                with r4: metric_card("Pertumbuhan Pendapatan", f"{rasio.get('Pertumbuhan Pendapatan (%)', 0)} %")
                 
-                # Kotak Penjelasan Rumus
-                st.info("""
-                **Penjelasan Rumus & Indikator:**
-                *   **Efektivitas Pendapatan:** Mengukur seberapa besar realisasi pendapatan dibandingkan target anggaran. (Realisasi / Anggaran) x 100%. (Ideal: ≥ 100%).
-                *   **Efisiensi Belanja:** Mengukur seberapa hemat realisasi belanja terhadap pagu anggaran. (Realisasi / Anggaran) x 100%. (Ideal: ≤ 100%, tapi jangan terlalu kecil jika program tidak jalan).
-                *   **Kemandirian Daerah:** Mengukur seberapa besar kontribusi PAD terhadap total pendapatan. (PAD / Realisasi Pendapatan) x 100%. (Semakin tinggi semakin baik, >50% berarti mandiri).
-                *   **Pertumbuhan Pendapatan:** Mengukur persentase kenaikan pendapatan dari tahun ke tahun. (Butuh data komparatif).
-                """)
+                # Kotak Penjelasan & Rekomendasi per Rasio
+                st.markdown("---")
+                st.markdown("### 📝 Analisis Kondisi & Rekomendasi")
+                
+                st.info(f"**1. Efektivitas Pendapatan ({rasio.get('Efektivitas Pendapatan (%)', 0)}%)**\n\n"
+                        f"{get_ratio_insight('Efektivitas', rasio.get('Efektivitas Pendapatan (%)', 0))}")
+                
+                st.info(f"**2. Efisiensi Belanja ({rasio.get('Efisiensi Belanja (%)', 0)}%)**\n\n"
+                        f"{get_ratio_insight('Efisiensi', rasio.get('Efisiensi Belanja (%)', 0))}")
+                
+                st.info(f"**3. Kemandirian Daerah ({rasio.get('Kemandirian Daerah (%)', 0)}%)**\n\n"
+                        f"{get_ratio_insight('Kemandirian', rasio.get('Kemandirian Daerah (%)', 0))}")
+            
             else:
                 # Tampilan Perusahaan
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Total Pendapatan", f"Rp {nilai.get('pendapatan', 0):,.0f}")
-                m2.metric("Laba Bersih", f"Rp {nilai.get('laba', 0):,.0f}")
-                m3.metric("Total Aset", f"Rp {nilai.get('total_aset', 0):,.0f}")
-                m4.metric("Total Ekuitas", f"Rp {nilai.get('ekuitas', 0):,.0f}")
+                c1, c2, c3, c4 = st.columns(4)
+                with c1: metric_card("Total Pendapatan", format_rupiah(nilai.get('pendapatan', 0)))
+                with c2: metric_card("Laba Bersih", format_rupiah(nilai.get('laba', 0)))
+                with c3: metric_card("Total Aset", format_rupiah(nilai.get('total_aset', 0)))
+                with c4: metric_card("Total Ekuitas", format_rupiah(nilai.get('ekuitas', 0)))
                 
                 st.markdown("#### Rasio Keuangan Utama")
                 r1, r2, r3, r4, r5 = st.columns(5)
-                r1.metric("Current Ratio", f"{rasio.get('Current Ratio (x)', 0)} x", help="Rumus: Aset Lancar / Liabilitas Lancar")
-                r2.metric("Net Profit Margin", f"{rasio.get('Net Profit Margin (%)', 0)} %", help="Rumus: (Laba Bersih / Pendapatan) x 100%")
-                r3.metric("ROA", f"{rasio.get('ROA (%)', 0)} %", help="Rumus: (Laba Bersih / Total Aset) x 100%")
-                r4.metric("ROE", f"{rasio.get('ROE (%)', 0)} %", help="Rumus: (Laba Bersih / Ekuitas) x 100%")
-                r5.metric("Debt to Equity", f"{rasio.get('Debt to Equity (x)', 0)} x", help="Rumus: Total Liabilitas / Total Ekuitas")
+                with r1: metric_card("Current Ratio", f"{rasio.get('Current Ratio (x)', 0)} x")
+                with r2: metric_card("Net Profit Margin", f"{rasio.get('Net Profit Margin (%)', 0)} %")
+                with r3: metric_card("ROA", f"{rasio.get('ROA (%)', 0)} %")
+                with r4: metric_card("ROE", f"{rasio.get('ROE (%)', 0)} %")
+                with r5: metric_card("Debt to Equity", f"{rasio.get('Debt to Equity (x)', 0)} x")
 
-                st.info("""
-                **Penjelasan Rumus & Indikator:**
-                *   **Current Ratio:** Kemampuan membayar utang jangka pendek. (Aset Lancar / Liabilitas Lancar). Ideal > 1.5.
-                *   **Net Profit Margin:** Persentase laba bersih dari pendapatan. (Laba / Pendapatan). Semakin tinggi semakin baik.
-                *   **ROA:** Kemampuan aset menghasilkan laba. (Laba / Total Aset).
-                *   **ROE:** Tingkat pengembalian investasi pemegang saham. (Laba / Ekuitas).
-                *   **Debt to Equity (DER):** Perbandingan utang dengan modal. (Total Utang / Ekuitas). Ideal < 2.0.
-                """)
+                # Kotak Penjelasan Perusahaan
+                st.markdown("---")
+                st.info("**Penjelasan & Rekomendasi Umum Perusahaan:**\n"
+                        "*   **Current Ratio:** Kemampuan membayar utang jangka pendek. Jika < 1, perusahaan berisiko gagal bayar. Saran: Tambah modal kerja.\n"
+                        "*   **NPM & ROA/ROE:** Jika rendah, berarti perusahaan kurang efisien dalam menghasilkan laba. Saran: Tekan biaya operasional dan optimalkan penjualan.\n"
+                        "*   **DER:** Jika > 2.0, perusahaan terlalu bergantung pada utang. Saran: Kurangi beban utang atau tambah ekuitas.")
 
         with tab_grafik:
             st.markdown("### Analisis Visual Prospek")
