@@ -155,7 +155,7 @@ def ask_gemini_stream(prompt, audit_context, system_role="Asisten Auditor Profes
         yield f"\n\n⚠️ Terjadi kesalahan: {str(e)}"
 
 # ============================================================
-# AUDIT ENGINE V5 (FITUR LAMA)
+# AUDIT ENGINE V5 (FITUR LAMA - AMAN)
 # ============================================================
 def auto_detect_columns(df):
     mapping = {"date": None, "amount": None, "desc": None, "debit": None, "credit": None, "budget": None, "invoice": None}
@@ -249,49 +249,77 @@ def audit_outliers_iqr(df, amount_col):
     return findings, flagged
 
 # ============================================================
-# FINANCIAL ANALYSIS ENGINE (FITUR BARU)
+# SMART FINANCIAL ENGINE (FITUR BARU - FULL AUTO)
 # ============================================================
-def auto_detect_fin_columns(df):
-    mapping = {"pendapatan": None, "laba": None, "aset_lancar": None, "liabilitas_lancar": None, "total_aset": None, "total_liabilitas": None, "ekuitas": None}
-    for col in df.columns:
-        c = str(col).lower()
-        if not mapping["pendapatan"] and any(k in c for k in ["pendapatan", "revenue", "penjualan", "omzet", "sales"]): mapping["pendapatan"] = col
-        if not mapping["laba"] and any(k in c for k in ["laba", "profit", "net income", "surplus", "neto"]): mapping["laba"] = col
-        if not mapping["aset_lancar"] and any(k in c for k in ["aset lancar", "current asset", "kas", "piutang"]): mapping["aset_lancar"] = col
-        if not mapping["liabilitas_lancar"] and any(k in c for k in ["liabilitas lancar", "utang lancar", "current liab", "utang jangka pendek"]): mapping["liabilitas_lancar"] = col
-        if not mapping["total_aset"] and any(k in c for k in ["total aset", "total asset", "jumlah aset"]): mapping["total_aset"] = col
-        if not mapping["total_liabilitas"] and any(k in c for k in ["total liabilitas", "total utang", "total liab"]): mapping["total_liabilitas"] = col
-        if not mapping["ekuitas"] and any(k in c for k in ["ekuitas", "equity", "modal", "kekayaan bersih"]): mapping["ekuitas"] = col
-    return mapping
+def auto_extract_financials(df):
+    """
+    Mesin pintar untuk membaca baris laporan keuangan secara otomatis.
+    Mencari nama akun (string) dan nilai nominal (angka).
+    """
+    results = {
+        "pendapatan": 0.0, "laba": 0.0, "aset_lancar": 0.0, "liabilitas_lancar": 0.0,
+        "total_aset": 0.0, "total_liabilitas": 0.0, "ekuitas": 0.0
+    }
+    
+    # 1. Deteksi kolom teks (Nama Akun / Keterangan) dan kolom angka (Nominal / Saldo)
+    str_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
+    num_cols = df.select_dtypes(include=['number', 'float', 'int']).columns.tolist()
+    
+    keywords = {
+        "pendapatan": ["pendapatan", "penjualan", "omzet", "revenue", "hasil usaha", "penerimaan"],
+        "laba": ["laba bersih", "surplus", "net income", "net profit", "laba tahun berjalan", "laba (rugi)"],
+        "aset_lancar": ["total aset lancar", "jumlah aset lancar", "current assets", "aset lancar", "harta lancar"],
+        "liabilitas_lancar": ["total liabilitas jangka pendek", "total utang lancar", "current liabilities", "liabilitas jangka pendek", "utang jangka pendek"],
+        "total_aset": ["total aset", "jumlah aset", "total assets", "total harta"],
+        "total_liabilitas": ["total liabilitas", "total utang", "total liabilities", "total kewajiban"],
+        "ekuitas": ["total ekuitas", "total modal", "total equity", "ekuitas", "kekayaan bersih"]
+    }
 
-def hitung_rasio(df, map_col):
+    # --- SKENARIO 1: Laporan Keuangan Berbentuk Baris (Nama Akun di Baris) ---
+    if str_cols and num_cols:
+        name_col = str_cols[0] # Asumsi kolom teks pertama adalah nama akun
+        val_col = num_cols[0]  # Asumsi kolom angka pertama adalah saldo/nominal
+        
+        for key, kws in keywords.items():
+            for kw in kws:
+                # Cari baris yang mengandung kata kunci
+                mask = df[name_col].astype(str).str.lower().str.contains(kw, na=False)
+                if mask.any():
+                    # Jumlahkan nilainya
+                    val = pd.to_numeric(df.loc[mask, val_col], errors='coerce').sum()
+                    results[key] += val
+
+    # --- SKENARIO 2: Laporan Keuangan Berbentuk Kolom (Nama Akun di Header) ---
+    # Jika Skenario 1 gagal (semua 0), kita coba baca dari nama kolom
+    if all(v == 0 for v in results.values()):
+        for col in df.columns:
+            c = str(col).lower()
+            for key, kws in keywords.items():
+                if any(kw in c for kw in kws):
+                    results[key] += pd.to_numeric(df[col], errors='coerce').sum()
+
+    return results
+
+def hitung_rasio_dari_nilai(nilai):
     rasio = {}
-    try:
-        def get_val(key):
-            if map_col[key] and map_col[key] in df.columns:
-                return pd.to_numeric(df[map_col[key]], errors='coerce').sum()
-            return 0
+    pendapatan = nilai.get("pendapatan", 0)
+    laba = nilai.get("laba", 0)
+    aset_lancar = nilai.get("aset_lancar", 0)
+    liab_lancar = nilai.get("liabilitas_lancar", 0)
+    total_aset = nilai.get("total_aset", 0)
+    total_liab = nilai.get("total_liabilitas", 0)
+    ekuitas = nilai.get("ekuitas", 0)
 
-        pendapatan = get_val("pendapatan")
-        laba = get_val("laba")
-        aset_lancar = get_val("aset_lancar")
-        liab_lancar = get_val("liabilitas_lancar")
-        total_aset = get_val("total_aset")
-        total_liab = get_val("total_liabilitas")
-        ekuitas = get_val("ekuitas")
-
-        rasio["Current Ratio (x)"] = round(aset_lancar / liab_lancar, 2) if liab_lancar > 0 else 0.0
-        rasio["Net Profit Margin (%)"] = round((laba / pendapatan) * 100, 2) if pendapatan > 0 else 0.0
-        rasio["ROA (%)"] = round((laba / total_aset) * 100, 2) if total_aset > 0 else 0.0
-        rasio["ROE (%)"] = round((laba / ekuitas) * 100, 2) if ekuitas > 0 else 0.0
-        rasio["Debt to Equity (x)"] = round(total_liab / ekuitas, 2) if ekuitas > 0 else 0.0
-
-        return rasio, {"Pendapatan": pendapatan, "Laba": laba, "Total Aset": total_aset, "Total Liabilitas": total_liab, "Ekuitas": ekuitas}
-    except Exception:
-        return {}, {}
+    rasio["Current Ratio (x)"] = round(aset_lancar / liab_lancar, 2) if liab_lancar > 0 else 0.0
+    rasio["Net Profit Margin (%)"] = round((laba / pendapatan) * 100, 2) if pendapatan > 0 else 0.0
+    rasio["ROA (%)"] = round((laba / total_aset) * 100, 2) if total_aset > 0 else 0.0
+    rasio["ROE (%)"] = round((laba / ekuitas) * 100, 2) if ekuitas > 0 else 0.0
+    rasio["Debt to Equity (x)"] = round(total_liab / ekuitas, 2) if ekuitas > 0 else 0.0
+    
+    return rasio
 
 # ============================================================
-# EXPORT FUNCTIONS (PDF & EXCEL)
+# EXPORT FUNCTIONS
 # ============================================================
 def generate_excel(flagged_data_dict, findings_list):
     buffer = io.BytesIO()
@@ -546,63 +574,54 @@ def page_audit():
         render_audit_results(res["findings"], res["flagged"], res["filename"], res["entitas"], res["periode"], res["score"])
 
 # ============================================================
-# HALAMAN ANALISIS KEUANGAN (FITUR BARU)
+# HALAMAN ANALISIS KEUANGAN (FITUR BARU - OTOMATIS PENUH)
 # ============================================================
 def page_financial_analysis():
     finora_header("Analisis Laporan Keuangan", "Evaluasi Kesehatan Finansial & Prospek (Perusahaan / Pemerintahan)")
     
     st.markdown("### 1. Upload Laporan Keuangan")
     c1, c2 = st.columns([2, 1])
-    uploaded_fin = c1.file_uploader("Upload File Excel/CSV Laporan Keuangan", type=["xlsx", "csv"], key="fin_upload")
+    uploaded_fin = c1.file_uploader("Upload File Excel/CSV Laporan Keuangan (Neraca / Laba Rugi)", type=["xlsx", "csv"], key="fin_upload")
     entity_type = c2.selectbox("Jenis Entitas", ["Perusahaan Swasta / Tbk", "Pemerintahan / BLU"])
 
     if uploaded_fin:
         df_fin = pd.read_excel(uploaded_fin) if uploaded_fin.name.endswith('xlsx') else pd.read_csv(uploaded_fin)
-        detected_fin = auto_detect_fin_columns(df_fin)
         
-        st.markdown("### 2. Pemetaan Kolom Laporan Keuangan")
-        with st.expander("⚙️ Konfigurasi Kolom Keuangan", expanded=True):
-            f_c1, f_c2, f_c3 = st.columns(3)
-            col_pendapatan = f_c1.selectbox("Pendapatan / Penjualan", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["pendapatan"])+1 if detected_fin["pendapatan"] else 0)
-            col_laba = f_c2.selectbox("Laba Bersih / Surplus", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["laba"])+1 if detected_fin["laba"] else 0)
-            col_ekuitas = f_c3.selectbox("Total Ekuitas / Kekayaan", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["ekuitas"])+1 if detected_fin["ekuitas"] else 0)
-            
-            f_c4, f_c5, f_c6 = st.columns(3)
-            col_aset = f_c4.selectbox("Total Aset", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["total_aset"])+1 if detected_fin["total_aset"] else 0)
-            col_liab = f_c5.selectbox("Total Liabilitas / Utang", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["total_liabilitas"])+1 if detected_fin["total_liabilitas"] else 0)
-            
-            f_c7, f_c8 = st.columns(2)
-            col_aset_lancar = f_c7.selectbox("Aset Lancar", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["aset_lancar"])+1 if detected_fin["aset_lancar"] else 0)
-            col_liab_lancar = f_c8.selectbox("Liabilitas Jangka Pendek", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["liabilitas_lancar"])+1 if detected_fin["liabilitas_lancar"] else 0)
+        st.success("✨ File berhasil dibaca. FINORA AI akan otomatis mengelompokkan akun dan menghitung rasio.")
+        
+        if st.button("📊 ANALISIS KEUANGAN OTOMATIS", use_container_width=True):
+            with st.spinner("Membaca akun, mengelompokkan, dan menghitung rasio..."):
+                # Mesin otomatis membaca baris/kolom
+                nilai_utama = auto_extract_financials(df_fin)
+                rasio = hitung_rasio_dari_nilai(nilai_utama)
+                
+                st.session_state['fin_results'] = {
+                    "rasio": rasio, 
+                    "nilai": nilai_utama, 
+                    "entity_type": entity_type
+                }
 
-        map_col = {
-            "pendapatan": col_pendapatan, "laba": col_laba, "ekuitas": col_ekuitas,
-            "total_aset": col_aset, "total_liabilitas": col_liab,
-            "aset_lancar": col_aset_lancar, "liabilitas_lancar": col_liab_lancar
-        }
-
-        if st.button("📊 ANALISIS KEUANGAN SEKARANG", use_container_width=True):
-            with st.spinner("Menghitung rasio dan menyiapkan laporan..."):
-                rasio, nilai_utama = hitung_rasio(df_fin, map_col)
-                st.session_state['fin_results'] = {"rasio": rasio, "nilai": nilai_utama, "entity_type": entity_type}
-
+    # Tampilkan Hasil
     if 'fin_results' in st.session_state:
         res = st.session_state['fin_results']
-        rasio = res["rasio"]; nilai = res["nilai"]
+        rasio = res["rasio"]
+        nilai = res["nilai"]
         
         st.markdown("---")
         tab_rasio, tab_grafik, tab_ai_advisor = st.tabs(["📊 Ringkasan Rasio", "📈 Visualisasi & Prospek", "🧠 AI Financial Advisor"])
         
         with tab_rasio:
             st.markdown(f"### Kesehatan Finansial: **{res['entity_type']}**")
-            if not rasio:
-                st.warning("Data tidak cukup untuk menghitung rasio. Pastikan kolom sudah benar.")
+            
+            if all(v == 0 for v in nilai.values()):
+                st.error("Sistem tidak dapat mendeteksi angka. Pastikan file Excel memiliki kolom teks (Nama Akun) dan kolom angka (Nominal/Saldo).")
             else:
+                # Tampilkan Metrik Utama
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Pendapatan", f"Rp {nilai.get('Pendapatan', 0):,.0f}")
-                m2.metric("Laba Bersih", f"Rp {nilai.get('Laba', 0):,.0f}")
-                m3.metric("Total Aset", f"Rp {nilai.get('Total Aset', 0):,.0f}")
-                m4.metric("Ekuitas", f"Rp {nilai.get('Ekuitas', 0):,.0f}")
+                m1.metric("Total Pendapatan", f"Rp {nilai.get('pendapatan', 0):,.0f}")
+                m2.metric("Laba Bersih", f"Rp {nilai.get('laba', 0):,.0f}")
+                m3.metric("Total Aset", f"Rp {nilai.get('total_aset', 0):,.0f}")
+                m4.metric("Total Ekuitas", f"Rp {nilai.get('ekuitas', 0):,.0f}")
                 
                 st.markdown("#### Rasio Keuangan Utama")
                 r1, r2, r3, r4, r5 = st.columns(5)
@@ -614,16 +633,16 @@ def page_financial_analysis():
 
         with tab_grafik:
             st.markdown("### Analisis Visual Prospek")
-            if nilai.get('Pendapatan', 0) > 0 or nilai.get('Total Aset', 0) > 0:
+            if nilai.get('pendapatan', 0) > 0 or nilai.get('total_aset', 0) > 0:
                 fig_bar = go.Figure(data=[
-                    go.Bar(name='Pendapatan', x=['Keuangan'], y=[nilai.get('Pendapatan', 0)], marker_color='#FF5C8B'),
-                    go.Bar(name='Laba Bersih', x=['Keuangan'], y=[nilai.get('Laba', 0)], marker_color='#7A1F3D')
+                    go.Bar(name='Pendapatan', x=['Keuangan'], y=[nilai.get('pendapatan', 0)], marker_color='#FF5C8B'),
+                    go.Bar(name='Laba Bersih', x=['Keuangan'], y=[nilai.get('laba', 0)], marker_color='#7A1F3D')
                 ])
                 fig_bar.update_layout(barmode='group', title="Pendapatan vs Laba Bersih", height=400)
                 st.plotly_chart(fig_bar, use_container_width=True)
                 
                 fig_pie = px.pie(
-                    names=["Liabilitas", "Ekuitas"], values=[nilai.get('Total Liabilitas', 0), nilai.get('Ekuitas', 0)],
+                    names=["Total Liabilitas", "Total Ekuitas"], values=[nilai.get('total_liabilitas', 0), nilai.get('ekuitas', 0)],
                     title="Struktur Pendanaan (Utang vs Modal)", color_discrete_sequence=['#EF6C00', '#2E7D32']
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
@@ -632,13 +651,13 @@ def page_financial_analysis():
 
         with tab_ai_advisor:
             st.markdown("### 🤖 AI Financial Advisor")
-            st.info("AI akan menganalisis prospek dan kesehatan finansial berdasarkan rasio di atas.")
+            st.info("AI akan menganalisis prospek dan kesehatan finansial berdasarkan hasil ekstraksi otomatis di atas.")
             
             if st.button("Buat Laporan Analisis AI", use_container_width=True):
                 context_ai = f"""
                 Jenis Entitas: {res['entity_type']}
-                Pendapatan: Rp {nilai.get('Pendapatan', 0):,.0f}, Laba Bersih: Rp {nilai.get('Laba', 0):,.0f}
-                Total Aset: Rp {nilai.get('Total Aset', 0):,.0f}, Total Liabilitas: Rp {nilai.get('Total Liabilitas', 0):,.0f}, Ekuitas: Rp {nilai.get('Ekuitas', 0):,.0f}
+                Pendapatan: Rp {nilai.get('pendapatan', 0):,.0f}, Laba Bersih: Rp {nilai.get('laba', 0):,.0f}
+                Total Aset: Rp {nilai.get('total_aset', 0):,.0f}, Total Liabilitas: Rp {nilai.get('total_liabilitas', 0):,.0f}, Ekuitas: Rp {nilai.get('ekuitas', 0):,.0f}
                 Rasio: Current Ratio {rasio.get('Current Ratio (x)', 0)}x, NPM {rasio.get('Net Profit Margin (%)', 0)}%, ROA {rasio.get('ROA (%)', 0)}%, ROE {rasio.get('ROE (%)', 0)}%, DER {rasio.get('Debt to Equity (x)', 0)}x
                 """
                 prompt_ai = f"""
