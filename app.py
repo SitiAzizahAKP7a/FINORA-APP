@@ -5,6 +5,7 @@ import sqlite3
 import json
 import os
 import io
+import base64
 import hashlib
 from datetime import datetime
 import plotly.express as px
@@ -21,7 +22,16 @@ from reportlab.lib import colors
 # ============================================================
 LOGO_FILENAME = "logo.png"
 
-st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon=LOGO_FILENAME if os.path.exists(LOGO_FILENAME) else "💗", layout="wide")
+# Fungsi untuk mengonversi gambar logo ke Base64 agar bisa tampil di HTML
+def get_base64_image(image_path):
+    if os.path.exists(image_path):
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    return ""
+
+LOGO_B64 = get_base64_image(LOGO_FILENAME)
+
+st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon=LOGO_FILENAME if os.path.exists(LOGO_FILENAME) else "F", layout="wide")
 
 st.markdown("""
 <style>
@@ -32,7 +42,7 @@ st.markdown("""
 .stButton > button:hover { background-color: var(--finora-burgundy); color: white !important; }
 h1, h2, h3 { color: var(--finora-burgundy); }
 .finora-header { background: linear-gradient(135deg, #FF5C8B 0%, #7A1F3D 100%); color: white; padding: 24px; border-radius: 16px; margin-bottom: 20px; }
-.finora-header h1 { color: white; margin: 0; font-size: 30px; }
+.finora-header h1 { color: white; margin: 0; font-size: 30px; display: flex; align-items: center; }
 .finora-header p  { color: #FFF0F4; margin: 6px 0 0 0; }
 /* CSS Khusus Kartu Metrik Kustom */
 .metric-card {
@@ -373,7 +383,7 @@ def hitung_rasio_dari_nilai(nilai, entity_type):
         rasio["Efektivitas Pendapatan (%)"] = round((real_p / ang_p) * 100, 2) if ang_p > 0 else 0.0
         rasio["Efisiensi Belanja (%)"] = round((real_b / ang_b) * 100, 2) if ang_b > 0 else 0.0
         rasio["Kemandirian Daerah (%)"] = round((pad / real_p) * 100, 2) if real_p > 0 else 0.0
-        rasio["Pertumbuhan Pendapatan (%)"] = 0.0 # Karena belum ada data historis
+        rasio["Pertumbuhan Pendapatan (%)"] = 0.0 
     else:
         pendapatan = nilai.get("pendapatan", 0)
         laba = nilai.get("laba", 0)
@@ -393,7 +403,6 @@ def hitung_rasio_dari_nilai(nilai, entity_type):
 def get_detailed_insight(ratio_name, val):
     """Memberikan penjelasan panjang dengan format HTML (tanpa bintang) dan menangani nilai 0."""
     
-    # PENANGANAN UNTUK NILAI 0 ATAU KOSONG
     if val == 0 or pd.isna(val):
         if "Pertumbuhan" in ratio_name:
             return "<b>Kondisi:</b> 0% (Tidak Ada Data Pertumbuhan / Stagnan).<br><b>Penyebab:</b> Sistem saat ini hanya memproses data 1 periode (tahun berjalan). Untuk menghitung pertumbuhan (YoY), dibutuhkan data Realisasi Pendapatan Tahun Sebelumnya.<br><b>Dampak:</b> Tidak dapat melihat tren naik/turunnya pendapatan dari tahun ke tahun.<br><b>Rekomendasi:</b> Simpan laporan tahun ini, lalu bandingkan dengan laporan tahun depan. Atau, upload file Excel yang memiliki kolom 'Realisasi Tahun Lalu' agar sistem dapat menghitung rasio pertumbuhan secara otomatis."
@@ -410,7 +419,6 @@ def get_detailed_insight(ratio_name, val):
         else:
             return "<b>Kondisi:</b> Rasio tidak dapat dihitung (0 atau Kosong).<br><b>Penyebab:</b> Data pembentuk rasio tidak ditemukan dalam file yang diunggah.<br><b>Rekomendasi:</b> Periksa format file Excel Anda dan pastikan nama akun sesuai standar."
 
-    # PENJELASAN JIKA NILAI DI ATAS 0
     if "Efektivitas" in ratio_name:
         if val >= 100:
             return "<b>Kondisi:</b> Sangat Baik. Realisasi melampaui target anggaran.<br><b>Penyebab:</b> Kinerja pemungutan pajak/retribusi yang optimal, kepatuhan wajib pajak tinggi, atau pertumbuhan ekonomi daerah yang positif.<br><b>Dampak:</b> Meningkatkan kapasitas fiskal dan ruang belanja daerah.<br><b>Rekomendasi:</b> Pertahankan sistem pemungutan yang ada. Mulai eksplorasi sumber PAD baru (digitalisasi retribusi, potensi pariwisata) agar tidak <i>over-reliance</i> pada satu sektor."
@@ -540,7 +548,9 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
 # UI COMPONENTS & KKA RENDER
 # ============================================================
 def finora_header(title, subtitle):
-    st.markdown(f'<div class="finora-header"><h1>💗 {title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
+    # Menggunakan tag HTML <img> untuk menampilkan logo menggantikan emoji love
+    logo_html = f'<img src="data:image/png;base64,{LOGO_B64}" style="height: 40px; vertical-align: middle; margin-right: 12px; margin-top: -5px; border-radius: 8px;">' if LOGO_B64 else ''
+    st.markdown(f'<div class="finora-header"><h1>{logo_html} {title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
 
 def render_audit_results(all_findings, flagged_data, filename, entitas, periode, score):
     color = "#C62828" if score > 50 else "#EF6C00" if score > 20 else "#2E7D32"
@@ -921,7 +931,7 @@ def page_landing():
         if os.path.exists(LOGO_FILENAME):
             st.image(LOGO_FILENAME, width=250)
         else:
-            st.markdown("<h1 style='text-align:center; font-size: 5rem;'>💗</h1>", unsafe_allow_html=True)
+            st.markdown("<h1 style='text-align:center; font-size: 5rem;'>F</h1>", unsafe_allow_html=True)
 
     st.markdown("""
     <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #FFF0F4 0%, #FFF5E8 100%); border-radius: 20px; margin-bottom: 40px; border: 2px solid #FF5C8B; box-shadow: 0 10px 30px rgba(255, 92, 139, 0.15);">
@@ -972,7 +982,7 @@ def main():
         try:
             st.sidebar.image(LOGO_FILENAME, width=180)
         except:
-            st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
+            st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">F</h1>', unsafe_allow_html=True)
             
         st.sidebar.markdown('<p style="text-align:center;font-size:12px;color:#7A1F3D;">Financial Intelligence<br>Platform</p>', unsafe_allow_html=True)
         st.sidebar.markdown("---")
