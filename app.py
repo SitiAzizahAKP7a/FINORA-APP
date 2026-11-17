@@ -110,7 +110,7 @@ def ask_gemini(prompt, audit_context):
             return "⚠️ API Key Gemini belum diatur. Silakan tambahkan `GEMINI_API_KEY` di menu Secrets Streamlit."
         
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         
         full_prompt = f"""
         Kamu adalah FINORA AI, seorang Asisten Auditor Profesional.
