@@ -11,7 +11,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -226,8 +226,6 @@ def generate_excel(flagged_data_dict, findings_list):
     buffer.seek(0)
     return buffer
 
-from reportlab.platypus import Table, TableStyle
-
 def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
@@ -238,7 +236,6 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
     heading_style = ParagraphStyle(name='Heading', parent=styles['Heading2'], textColor=colors.HexColor('#FF5C8B'))
     normal_style = styles['Normal']
     
-    # 1. KOP KKA
     elements.append(Paragraph("KERTAS KERJA AUDIT (KKA)", title_style))
     elements.append(Paragraph("FINORA Financial Intelligence System", normal_style))
     elements.append(Spacer(1, 10))
@@ -259,7 +256,6 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
     elements.append(t_header)
     elements.append(Spacer(1, 20))
     
-    # 2. RINGKASAN TEMUAN
     elements.append(Paragraph("A. Ringkasan Temuan (Summary of Findings)", heading_style))
     elements.append(Spacer(1, 10))
     
@@ -280,7 +276,6 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
     elements.append(t_summary)
     elements.append(Spacer(1, 20))
     
-    # 3. RINCIAN TEMUAN
     elements.append(Paragraph("B. Rincian Temuan, Bukti, dan Rekomendasi", heading_style))
     elements.append(Spacer(1, 10))
     
@@ -289,7 +284,6 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
         elements.append(Paragraph(f"<b>1. Kondisi:</b> {f['detail']}", normal_style))
         elements.append(Paragraph(f"<b>2. Rekomendasi:</b> {f['recommendation']}", normal_style))
         
-        # Tampilkan Bukti Data Mentah ke PDF
         modul_name = f['module']
         df_flag = pd.DataFrame()
         if modul_name in flagged_data and not flagged_data[modul_name].empty:
@@ -307,11 +301,8 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
             elements.append(Spacer(1, 5))
             elements.append(Paragraph("<i>Bukti Audit (Data Terindikasi):</i>", normal_style))
             
-            # Ambil max 5 baris untuk PDF agar tidak kepanjangan
             preview_df = df_flag.head(5)
             raw_data = [preview_df.columns.tolist()] + preview_df.values.tolist()
-            
-            # Bersihkan data dari tipe data pandas yang aneh
             raw_data = [[str(cell) for cell in row] for row in raw_data]
             
             t_raw = Table(raw_data)
@@ -324,13 +315,13 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
         
         elements.append(Spacer(1, 20))
 
-    # 4. KESIMPULAN
     elements.append(Paragraph("C. Kesimpulan Auditor", heading_style))
     elements.append(Paragraph(f"Ditemukan {len(findings_list)} indikasi masalah. Data memerlukan perbaikan dan verifikasi dokumen lebih lanjut.", normal_style))
 
     doc.build(elements)
     buffer.seek(0)
     return buffer
+
 # ============================================================
 # UI COMPONENTS & KKA RENDER
 # ============================================================
@@ -344,7 +335,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
 
     color = "#C62828" if score > 50 else "#EF6C00" if score > 20 else "#2E7D32"
 
-    # HEADER KKA
     st.markdown(f"""
     <div style="background-color: white; padding: 20px; border-radius: 10px; border: 2px solid #FF5C8B; margin-bottom: 20px;">
         <h2 style="color: #7A1F3D; text-align: center; margin-bottom: 5px;">KERTAS KERJA AUDIT (KKA)</h2>
@@ -392,7 +382,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
                 
                 st.error(f"**5. Rekomendasi Auditor:** {f['recommendation']}")
                 
-                # TAMPILKAN BUKTI DATA MENTAH (Langsung di dalam KKA)
                 modul_name = f['module']
                 if modul_name in flagged_data and not flagged_data[modul_name].empty:
                     st.markdown("**📂 Bukti Audit (Data Terindikasi):**")
@@ -418,12 +407,12 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
         col1, col2 = st.columns(2)
         excel_buffer = generate_excel(flagged_data, all_findings)
         col1.download_button("⬇️ Download Excel (Multi-Sheet)", data=excel_buffer, file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        pdf_buffer = generate_pdf(all_findings)
+        
+        # PEMANGGILAN PDF SUDAH DIPERBAIKI
+        pdf_buffer = generate_pdf(entitas, periode, filename, score, all_findings, flagged_data)
         col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
         
-        # LOGIKA SIMPAN KE DATABASE (Hanya jalan kalau bukan dari menu riwayat)
         if not is_save_view:
-            # Rekonstruksi dictionary of dataframes ke format JSON agar bisa disimpan
             flagged_json = {k: v.to_dict(orient="records") for k, v in flagged_data.items() if not v.empty}
             summary_to_save = {
                 "total_findings": len(all_findings), 
@@ -432,7 +421,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
                 "periode": periode,
                 "flagged_data": flagged_json
             }
-            # (Simpan fungsi ini ada di luar render_audit_results karena butuh akses uploaded_file)
             return summary_to_save
 
     with tab_grafik:
@@ -530,7 +518,6 @@ def page_audit():
                 score = min(100, (high_count * 20) + (med_count * 10))
 
                 st.markdown("---")
-                # Render UI dan ambil data untuk disimpan
                 summary_to_save = render_audit_results(all_findings, flagged_data, uploaded.name, entitas, periode, score, is_save_view=False)
                 
                 if summary_to_save:
@@ -576,7 +563,6 @@ def page_simpan():
         if an:
             summary_data = json.loads(an["summary_json"])
             
-            # Rekonstruksi data
             entitas = summary_data.get("entitas", "-")
             periode = summary_data.get("periode", "-")
             score = summary_data.get("score", 0)
@@ -586,7 +572,6 @@ def page_simpan():
             findings_df = fetch_findings(aid)
             findings_list = findings_df.to_dict("records")
             
-            # Tampilkan KKA Persis Seperti Aslinya
             render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score, is_save_view=True)
 
 # ============================================================
