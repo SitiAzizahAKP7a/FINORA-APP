@@ -19,7 +19,10 @@ from reportlab.lib import colors
 # ============================================================
 # CONFIG & STYLE GLOBAL
 # ============================================================
-st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon="logo.png", layout="wide")
+# Menggunakan nama file persis seperti yang ada di GitHub Anda
+LOGO_FILENAME = "WhatsApp Image 2026-11-17 at 19.15.40.jpeg"
+
+st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon=LOGO_FILENAME, layout="wide")
 
 st.markdown("""
 <style>
@@ -590,9 +593,9 @@ def page_landing():
     # Hero Section
     col_img1, col_img2, col_img3 = st.columns([1, 1.5, 1])
     with col_img2:
-        # Menggunakan logo.png dengan fallback ke emoji jika gambar belum ada
         try:
-            st.image("logo.png", use_container_width=True)
+            # Logo dibuat ukuran tetap 250px agar tidak terlalu besar
+            st.image(LOGO_FILENAME, width=250)
         except Exception:
             st.markdown("<h1 style='text-align:center; font-size: 5rem;'>💗</h1>", unsafe_allow_html=True)
 
@@ -849,9 +852,9 @@ def main():
     
     # Jika sudah klik "Start", tampilkan Sidebar dan Aplikasi Utama
     else:
-        # Mengganti tulisan 💗 FINORA di sidebar dengan logo
         try:
-            st.sidebar.image("logo.png", use_container_width=True)
+            # Logo di sidebar dibuat ukuran 180px agar pas dan tidak terlalu besar
+            st.sidebar.image(LOGO_FILENAME, width=180)
         except Exception:
             st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
             
