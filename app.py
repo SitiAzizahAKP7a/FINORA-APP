@@ -6,7 +6,6 @@ import json
 import os
 import io
 import hashlib
-import time
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -105,66 +104,58 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (GEMINI TERBARU DENGAN RETRY & FALLBACK)
+# AI ENGINE (STREAMING UNTUK RESPON CEPAT)
 # ============================================================
-def ask_gemini(prompt, audit_context):
+def ask_gemini_stream(prompt, audit_context):
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
         if not api_key:
-            return "⚠️ API Key Gemini belum diatur. Silakan tambahkan `GEMINI_API_KEY` di menu Secrets Streamlit."
+            yield "⚠️ API Key Gemini belum diatur."
+            return
         
         client = genai.Client(api_key=api_key)
         
+        # Konteks dipersingkat agar AI tidak lambat membacanya
         full_prompt = f"""
-        Kamu adalah FINORA AI, seorang Asisten Auditor Profesional.
-        Tugasmu adalah membantu auditor menganalisis data berdasarkan Kertas Kerja Audit (KKA) di bawah ini.
-        Jawab dengan bahasa profesional, ringkas, dan berfokus pada temuan audit.
-        Jangan pernah mengarang data. Jika informasi tidak ada di konteks, katakan "Data tidak tersedia dalam KKA".
-
+        Kamu adalah FINORA AI, Asisten Auditor Profesional.
+        Jawab pertanyaan auditor berdasarkan KKA ini secara ringkas, profesional, dan to-the-point.
+        
         [KONTEKS KKA]
         {audit_context}
-
-        [PERTANYAAN AUDITOR]
+        
+        [PERTANYAAN]
         {prompt}
         """
         
-        # Daftar model yang akan dicoba secara berurutan
-        models_to_try = [
-            'gemini-3.8-flash',
-            'gemini-flash-latest'
-        ]
-        
-        last_error = None
-        
-        for model_name in models_to_try:
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=full_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=0.7,
-                            max_output_tokens=2048,
-                        )
-                    )
-                    return response.text
-                except Exception as e:
-                    last_error = str(e)
-                    if "503" in last_error or "UNAVAILABLE" in last_error:
-                        if attempt < max_retries - 1:
-                            time.sleep(2)
-                            continue
-                        else:
-                            break # Lanjut ke model berikutnya
-                    elif "404" in last_error or "NOT_FOUND" in last_error:
-                        break # Langsung coba model berikutnya
-                    else:
-                        return f"Terjadi kesalahan saat menghubungi AI: {last_error}"
-        
-        return f"⏳ Layanan AI sedang sibuk atau model tidak tersedia. Silakan coba lagi nanti. (Error: {last_error})"
+        # Streaming dengan Model 3.8-flash
+        try:
+            response = client.models.generate_content_stream(
+                model='gemini-3.8-flash',
+                contents=full_prompt,
+                config=types.GenerateContentConfig(temperature=0.5, max_output_tokens=1024)
+            )
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+            return
+        except Exception:
+            pass # Lanjut ke model fallback jika gagal
+            
+        # Fallback ke gemini-flash-latest
+        try:
+            response = client.models.generate_content_stream(
+                model='gemini-flash-latest',
+                contents=full_prompt,
+                config=types.GenerateContentConfig(temperature=0.5, max_output_tokens=1024)
+            )
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"\n\n⚠️ Layanan AI sedang sibuk. Silakan coba lagi. (Error: {str(e)})"
+            
     except Exception as e:
-        return f"Terjadi kesalahan pada sistem AI: {str(e)}"
+        yield f"⚠️ Kesalahan sistem: {str(e)}"
 
 # ============================================================
 # SMART AUTO-DETECT COLUMNS
@@ -490,14 +481,15 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # CHAT AI DENGAN FORM (ANTI RESET)
+    # CHAT AI DENGAN STREAMING (MUNCUL KATA PER KATA)
     with tab_ai:
         st.markdown("### 🤖 Tanya FINORA AI")
         st.info("Tanyakan analisis mendalam seputar temuan audit ini. AI akan menjawab berdasarkan data KKA di atas.")
         
-        context_text = f"Nama Entitas: {entitas}\nPeriode: {periode}\nSkor Risiko: {score}/100\n\nDaftar Temuan:\n"
+        # Konteks dipersingkat
+        context_text = f"Entitas: {entitas} | Periode: {periode} | Skor: {score}/100\nTemuan:\n"
         for idx, f in enumerate(all_findings, 1):
-            context_text += f"{idx}. [{f['risk_level']}] {f['module']}: {f['title']}. {f['detail']}\n"
+            context_text += f"- [{f['risk_level']}] {f['module']} ({f['title']})\n"
         
         if "ai_chat_history" not in st.session_state:
             st.session_state.ai_chat_history = []
@@ -512,8 +504,11 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             
             if submit_button and prompt:
                 st.session_state.ai_chat_history.append({"role": "user", "content": prompt})
-                with st.spinner("FINORA AI sedang menganalisis..."):
-                    response = ask_gemini(prompt, context_text)
+                
+                with st.chat_message("assistant"):
+                    # MENGGUNAKAN st.write_stream UNTUK EFEK MENGETIK
+                    response = st.write_stream(ask_gemini_stream(prompt, context_text))
+                    
                 st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
                 st.rerun()
 
