@@ -19,10 +19,9 @@ from reportlab.lib import colors
 # ============================================================
 # CONFIG & STYLE GLOBAL
 # ============================================================
-# SEKARANG MENGGUNAKAN LOGO.PNG
 LOGO_FILENAME = "logo.png"
 
-st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon=LOGO_FILENAME, layout="wide")
+st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon=LOGO_FILENAME if os.path.exists(LOGO_FILENAME) else "💗", layout="wide")
 
 st.markdown("""
 <style>
@@ -109,7 +108,7 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (gemini-3.8-flash via Interactions API + fallback)
+# AI ENGINE
 # ============================================================
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
@@ -117,7 +116,7 @@ def get_gemini_client():
         return None
     return genai.Client(api_key=api_key)
 
-def ask_gemini_stream(prompt, audit_context):
+def ask_gemini_stream(prompt, audit_context, system_role="Asisten Auditor Profesional"):
     try:
         client = get_gemini_client()
         if client is None:
@@ -127,90 +126,59 @@ def ask_gemini_stream(prompt, audit_context):
         model_id = "gemini-3.8-flash"
 
         full_prompt = f"""
-        Kamu adalah FINORA AI, Asisten Auditor Profesional.
-        Jawab pertanyaan berdasarkan Kertas Kerja Audit (KKA) ini secara ringkas, padat, dan profesional.
+        Kamu adalah FINORA AI, {system_role}.
+        Jawab pertanyaan berdasarkan konteks data yang diberikan secara ringkas, padat, dan profesional.
 
-        [KONTEKS KKA]
+        [KONTEKS DATA]
         {audit_context}
 
-        [PERTANYAAN]
+        [PERTANYAAN / INSTRUKSI]
         {prompt}
         """
 
         if hasattr(client, "interactions"):
             try:
-                stream = client.interactions.create(
-                    model=model_id,
-                    input=full_prompt,
-                    stream=True,
-                )
+                stream = client.interactions.create(model=model_id, input=full_prompt, stream=True)
                 for event in stream:
                     delta = getattr(event, "delta", None)
-                    if delta is not None:
-                        text = getattr(delta, "text", None)
-                        if text:
-                            yield text
-                    else:
-                        direct_text = getattr(event, "text", None)
-                        if direct_text:
-                            yield direct_text
+                    if delta and getattr(delta, "text", None): yield delta.text
+                    elif getattr(event, "text", None): yield event.text
                 return
-            except Exception as e_inter:
-                yield f"\n\n⚠️ Interactions API gagal ({type(e_inter).__name__}). Mencoba fallback...\n\n"
+            except Exception:
+                pass 
 
-        response_stream = client.models.generate_content_stream(
-            model=model_id,
-            contents=full_prompt,
-        )
+        response_stream = client.models.generate_content_stream(model=model_id, contents=full_prompt)
         for chunk in response_stream:
-            if getattr(chunk, "text", None):
-                yield chunk.text
+            if getattr(chunk, "text", None): yield chunk.text
 
     except Exception as e:
         yield f"\n\n⚠️ Terjadi kesalahan: {str(e)}"
 
 # ============================================================
-# SMART AUTO-DETECT COLUMNS
+# AUDIT ENGINE V5 (FITUR LAMA)
 # ============================================================
 def auto_detect_columns(df):
     mapping = {"date": None, "amount": None, "desc": None, "debit": None, "credit": None, "budget": None, "invoice": None}
     for col in df.columns:
-        col_lower = str(col).lower()
-        if not mapping["date"] and any(k in col_lower for k in ["tanggal", "tgl", "date", "waktu", "periode"]):
-            mapping["date"] = col
-        if not mapping["amount"] and any(k in col_lower for k in ["actual", "realisasi", "nominal", "jumlah", "total", "nilai", "amount", "harga"]):
-            mapping["amount"] = col
-        if not mapping["budget"] and any(k in col_lower for k in ["anggaran", "budget", "pagu"]):
-            mapping["budget"] = col
-        if not mapping["desc"] and any(k in col_lower for k in ["deskripsi", "keterangan", "uraian", "category", "kategori", "nama", "item", "barang"]):
-            mapping["desc"] = col
-        if not mapping["debit"] and any(k in col_lower for k in ["debit", "masuk", "pemasukan", "in"]):
-            mapping["debit"] = col
-        if not mapping["credit"] and any(k in col_lower for k in ["kredit", "keluar", "pengeluaran", "out"]):
-            mapping["credit"] = col
-        if not mapping["invoice"] and any(k in col_lower for k in ["invoice", "faktur", "nota", "ref", "no."]):
-            mapping["invoice"] = col
+        c = str(col).lower()
+        if not mapping["date"] and any(k in c for k in ["tanggal", "tgl", "date", "waktu", "periode"]): mapping["date"] = col
+        if not mapping["amount"] and any(k in c for k in ["actual", "realisasi", "nominal", "jumlah", "total", "nilai", "amount", "harga"]): mapping["amount"] = col
+        if not mapping["budget"] and any(k in c for k in ["anggaran", "budget", "pagu"]): mapping["budget"] = col
+        if not mapping["desc"] and any(k in c for k in ["deskripsi", "keterangan", "uraian", "category", "kategori", "nama", "item", "barang"]): mapping["desc"] = col
+        if not mapping["debit"] and any(k in c for k in ["debit", "masuk", "pemasukan", "in"]): mapping["debit"] = col
+        if not mapping["credit"] and any(k in c for k in ["kredit", "keluar", "pengeluaran", "out"]): mapping["credit"] = col
+        if not mapping["invoice"] and any(k in c for k in ["invoice", "faktur", "nota", "ref", "no."]): mapping["invoice"] = col
     return mapping
 
-# ============================================================
-# AUDIT ENGINE V5
-# ============================================================
 def audit_empty(df, cols_to_check):
     findings, flagged = [], pd.DataFrame()
     masks = [df[c].isna() for c in cols_to_check if c]
     if masks:
         combined_mask = masks[0]
-        for m in masks[1:]:
-            combined_mask |= m
+        for m in masks[1:]: combined_mask |= m
         flagged = df[combined_mask]
         if not flagged.empty:
-            findings.append({
-                "module": "Kelengkapan Data",
-                "risk_level": "Tinggi",
-                "title": f"{len(flagged)} baris memiliki data vital kosong",
-                "detail": "Ada data kosong pada kolom Tanggal/Nominal/Deskripsi.",
-                "recommendation": "Lengkapi data sebelum diproses."
-            })
+            findings.append({"module": "Kelengkapan Data", "risk_level": "Tinggi", "title": f"{len(flagged)} baris memiliki data vital kosong", "detail": "Ada data kosong pada kolom Tanggal/Nominal/Deskripsi.", "recommendation": "Lengkapi data sebelum diproses."})
     return findings, flagged
 
 def audit_duplicates(df, cols_to_check):
@@ -218,13 +186,7 @@ def audit_duplicates(df, cols_to_check):
     if cols_to_check:
         flagged = df[df.duplicated(subset=cols_to_check, keep=False)]
         if not flagged.empty:
-            findings.append({
-                "module": "Data Duplikat",
-                "risk_level": "Tinggi",
-                "title": f"{len(flagged)} baris transaksi ganda (100% sama)",
-                "detail": "Terdapat transaksi dengan nilai/deskripsi yang sama persis.",
-                "recommendation": "Pastikan bukan input dua kali (double-entry)."
-            })
+            findings.append({"module": "Data Duplikat", "risk_level": "Tinggi", "title": f"{len(flagged)} baris transaksi ganda (100% sama)", "detail": "Terdapat transaksi dengan nilai/deskripsi yang sama persis.", "recommendation": "Pastikan bukan input dua kali (double-entry)."})
     return findings, flagged
 
 def audit_negative(df, amount_col):
@@ -233,13 +195,7 @@ def audit_negative(df, amount_col):
         s = pd.to_numeric(df[amount_col], errors="coerce")
         flagged = df[s < 0]
         if not flagged.empty:
-            findings.append({
-                "module": "Observasi Nilai Negatif",
-                "risk_level": "Rendah",
-                "title": f"{len(flagged)} transaksi bernilai negatif",
-                "detail": "Ditemukan nilai minus pada kolom nominal. Nilai negatif tidak selalu salah (bisa jadi retur, diskon, atau kredit pendapatan), namun perlu dipastikan kewajarannya.",
-                "recommendation": "Lakukan uji petik untuk memastikan transaksi negatif ini memiliki memo retur atau bukti koreksi yang sah."
-            })
+            findings.append({"module": "Observasi Nilai Negatif", "risk_level": "Rendah", "title": f"{len(flagged)} transaksi bernilai negatif", "detail": "Ditemukan nilai minus pada kolom nominal.", "recommendation": "Lakukan uji petik untuk memastikan transaksi negatif memiliki memo retur/koreksi."})
     return findings, flagged
 
 def audit_overbudget(df, budget_col, amount_col):
@@ -250,15 +206,8 @@ def audit_overbudget(df, budget_col, amount_col):
             a = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
             flagged = df[a > b]
             if not flagged.empty:
-                findings.append({
-                    "module": "Overbudget (Melebihi Pagu)",
-                    "risk_level": "Tinggi",
-                    "title": f"{len(flagged)} akun melebihi pagu anggaran",
-                    "detail": "Nilai realisasi lebih besar daripada anggaran yang ditetapkan.",
-                    "recommendation": "Minta penjelasan terkait pergeseran atau kelebihan anggaran."
-                })
-        except Exception:
-            pass
+                findings.append({"module": "Overbudget (Melebihi Pagu)", "risk_level": "Tinggi", "title": f"{len(flagged)} akun melebihi pagu anggaran", "detail": "Nilai realisasi lebih besar daripada anggaran.", "recommendation": "Minta penjelasan terkait kelebihan anggaran."})
+        except: pass
     return findings, flagged
 
 def audit_weekend(df, date_col):
@@ -268,15 +217,8 @@ def audit_weekend(df, date_col):
             dates = pd.to_datetime(df[date_col], errors="coerce")
             flagged = df[dates.dt.dayofweek >= 5]
             if not flagged.empty:
-                findings.append({
-                    "module": "Transaksi Weekend",
-                    "risk_level": "Tinggi",
-                    "title": f"{len(flagged)} transaksi di hari Sabtu/Minggu",
-                    "detail": "Transaksi di luar hari kerja berisiko tinggi.",
-                    "recommendation": "Periksa otorisasi transaksi akhir pekan."
-                })
-        except Exception:
-            pass
+                findings.append({"module": "Transaksi Weekend", "risk_level": "Tinggi", "title": f"{len(flagged)} transaksi di hari Sabtu/Minggu", "detail": "Transaksi di luar hari kerja.", "recommendation": "Periksa otorisasi transaksi akhir pekan."})
+        except: pass
     return findings, flagged
 
 def audit_suspicious_words(df, desc_col):
@@ -287,15 +229,8 @@ def audit_suspicious_words(df, desc_col):
             pattern = '|'.join(keywords)
             flagged = df[df[desc_col].astype(str).str.lower().str.contains(pattern, na=False)]
             if not flagged.empty:
-                findings.append({
-                    "module": "Kata Kunci Mencurigakan",
-                    "risk_level": "Sedang",
-                    "title": f"{len(flagged)} transaksi mengandung kata kunci adjustment/void",
-                    "detail": "Transaksi manual sering menjadi celah manipulasi.",
-                    "recommendation": "Minta penjelasan tertulis dari pembuat jurnal."
-                })
-        except Exception:
-            pass
+                findings.append({"module": "Kata Kunci Mencurigakan", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi mengandung kata kunci adjustment/void", "detail": "Transaksi manual sering menjadi celah manipulasi.", "recommendation": "Minta penjelasan tertulis dari pembuat jurnal."})
+        except: pass
     return findings, flagged
 
 def audit_outliers_iqr(df, amount_col):
@@ -307,22 +242,56 @@ def audit_outliers_iqr(df, amount_col):
                 Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
                 IQR = Q3 - Q1
                 lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-                flagged = df[(pd.to_numeric(df[amount_col], errors="coerce") < lower) |
-                             (pd.to_numeric(df[amount_col], errors="coerce") > upper)]
+                flagged = df[(pd.to_numeric(df[amount_col], errors="coerce") < lower) | (pd.to_numeric(df[amount_col], errors="coerce") > upper)]
                 if not flagged.empty:
-                    findings.append({
-                        "module": "Anomali Nominal (Outlier)",
-                        "risk_level": "Tinggi",
-                        "title": f"{len(flagged)} nilai ekstrem (di luar batas IQR)",
-                        "detail": f"Batas wajar: {lower:,.0f} s.d {upper:,.0f}",
-                        "recommendation": "Uji petik transaksi terbesar/terkecil, pastikan bukan typo."
-                    })
-        except Exception:
-            pass
+                    findings.append({"module": "Anomali Nominal (Outlier)", "risk_level": "Tinggi", "title": f"{len(flagged)} nilai ekstrem (di luar batas IQR)", "detail": f"Batas wajar: {lower:,.0f} s.d {upper:,.0f}", "recommendation": "Uji petik transaksi terbesar/terkecil."})
+        except: pass
     return findings, flagged
 
 # ============================================================
-# EXPORT FUNCTIONS
+# FINANCIAL ANALYSIS ENGINE (FITUR BARU)
+# ============================================================
+def auto_detect_fin_columns(df):
+    mapping = {"pendapatan": None, "laba": None, "aset_lancar": None, "liabilitas_lancar": None, "total_aset": None, "total_liabilitas": None, "ekuitas": None}
+    for col in df.columns:
+        c = str(col).lower()
+        if not mapping["pendapatan"] and any(k in c for k in ["pendapatan", "revenue", "penjualan", "omzet", "sales"]): mapping["pendapatan"] = col
+        if not mapping["laba"] and any(k in c for k in ["laba", "profit", "net income", "surplus", "neto"]): mapping["laba"] = col
+        if not mapping["aset_lancar"] and any(k in c for k in ["aset lancar", "current asset", "kas", "piutang"]): mapping["aset_lancar"] = col
+        if not mapping["liabilitas_lancar"] and any(k in c for k in ["liabilitas lancar", "utang lancar", "current liab", "utang jangka pendek"]): mapping["liabilitas_lancar"] = col
+        if not mapping["total_aset"] and any(k in c for k in ["total aset", "total asset", "jumlah aset"]): mapping["total_aset"] = col
+        if not mapping["total_liabilitas"] and any(k in c for k in ["total liabilitas", "total utang", "total liab"]): mapping["total_liabilitas"] = col
+        if not mapping["ekuitas"] and any(k in c for k in ["ekuitas", "equity", "modal", "kekayaan bersih"]): mapping["ekuitas"] = col
+    return mapping
+
+def hitung_rasio(df, map_col):
+    rasio = {}
+    try:
+        def get_val(key):
+            if map_col[key] and map_col[key] in df.columns:
+                return pd.to_numeric(df[map_col[key]], errors='coerce').sum()
+            return 0
+
+        pendapatan = get_val("pendapatan")
+        laba = get_val("laba")
+        aset_lancar = get_val("aset_lancar")
+        liab_lancar = get_val("liabilitas_lancar")
+        total_aset = get_val("total_aset")
+        total_liab = get_val("total_liabilitas")
+        ekuitas = get_val("ekuitas")
+
+        rasio["Current Ratio (x)"] = round(aset_lancar / liab_lancar, 2) if liab_lancar > 0 else 0.0
+        rasio["Net Profit Margin (%)"] = round((laba / pendapatan) * 100, 2) if pendapatan > 0 else 0.0
+        rasio["ROA (%)"] = round((laba / total_aset) * 100, 2) if total_aset > 0 else 0.0
+        rasio["ROE (%)"] = round((laba / ekuitas) * 100, 2) if ekuitas > 0 else 0.0
+        rasio["Debt to Equity (x)"] = round(total_liab / ekuitas, 2) if ekuitas > 0 else 0.0
+
+        return rasio, {"Pendapatan": pendapatan, "Laba": laba, "Total Aset": total_aset, "Total Liabilitas": total_liab, "Ekuitas": ekuitas}
+    except Exception:
+        return {}, {}
+
+# ============================================================
+# EXPORT FUNCTIONS (PDF & EXCEL)
 # ============================================================
 def generate_excel(flagged_data_dict, findings_list):
     buffer = io.BytesIO()
@@ -333,8 +302,7 @@ def generate_excel(flagged_data_dict, findings_list):
             df_findings.to_excel(writer, sheet_name="Ringkasan Temuan", index=False)
         for modul, df_flag in flagged_data_dict.items():
             if not df_flag.empty:
-                sheet_name = modul[:31]
-                df_flag.to_excel(writer, sheet_name=sheet_name, index=False)
+                df_flag.to_excel(writer, sheet_name=modul[:31], index=False)
     buffer.seek(0)
     return buffer
 
@@ -342,7 +310,6 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     elements = []
-
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(name='Title', parent=styles['Heading1'], textColor=colors.HexColor('#7A1F3D'), alignment=1)
     heading_style = ParagraphStyle(name='Heading', parent=styles['Heading2'], textColor=colors.HexColor('#FF5C8B'))
@@ -360,21 +327,15 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
         ["Skor Risiko", f": {score}/100"]
     ]
     t_header = Table(header_data, colWidths=[120, 350])
-    t_header.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]))
+    t_header.setStyle(TableStyle([('FONTNAME', (0, 0), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 0), (-1, -1), 10), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
     elements.append(t_header)
     elements.append(Spacer(1, 20))
 
     elements.append(Paragraph("A. Ringkasan Temuan (Summary of Findings)", heading_style))
     elements.append(Spacer(1, 10))
-
     summary_data = [["No", "Kode", "Kategori Uji", "Risiko", "Deskripsi Singkat"]]
     for idx, f in enumerate(findings_list, 1):
         summary_data.append([str(idx), f"F-{idx:02d}", f['module'], f['risk_level'], f['title']])
-
     t_summary = Table(summary_data, colWidths=[30, 50, 100, 60, 230])
     t_summary.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF5C8B')),
@@ -382,32 +343,24 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('GRID', (0, 0), (-1, -1), 1, colors.grey),
     ]))
     elements.append(t_summary)
     elements.append(Spacer(1, 20))
 
-    elements.append(Paragraph("B. Rincian Temuan, Bukti, dan Rekomendasi", heading_style))
-    elements.append(Spacer(1, 10))
-
+    elements.append(Paragraph("B. Rincian Temuan & Bukti", heading_style))
     for idx, f in enumerate(findings_list, 1):
         elements.append(Paragraph(f"<b>F-{idx:02d}: {f['title']}</b>", normal_style))
         elements.append(Paragraph(f"<b>1. Kondisi:</b> {f['detail']}", normal_style))
         elements.append(Paragraph(f"<b>2. Rekomendasi:</b> {f['recommendation']}", normal_style))
-
+        
         modul_name = f['module']
         df_flag = pd.DataFrame()
-        if modul_name in flagged_data and not flagged_data[modul_name].empty:
-            df_flag = flagged_data[modul_name]
-        elif "Kelengkapan" in modul_name and "Kelengkapan Kosong" in flagged_data:
-            df_flag = flagged_data["Kelengkapan Kosong"]
-        elif "Duplikat" in modul_name and "Duplikasi Ekstrem" in flagged_data:
-            df_flag = flagged_data["Duplikasi Ekstrem"]
-        elif "Negatif" in modul_name and "Nilai Negatif" in flagged_data:
-            df_flag = flagged_data["Nilai Negatif"]
-        elif "Overbudget" in modul_name and "Overbudget" in flagged_data:
-            df_flag = flagged_data["Overbudget"]
+        if modul_name in flagged_data and not flagged_data[modul_name].empty: df_flag = flagged_data[modul_name]
+        elif "Kelengkapan" in modul_name and "Kelengkapan Kosong" in flagged_data: df_flag = flagged_data["Kelengkapan Kosong"]
+        elif "Duplikat" in modul_name and "Duplikasi Ekstrem" in flagged_data: df_flag = flagged_data["Duplikasi Ekstrem"]
+        elif "Negatif" in modul_name and "Nilai Negatif" in flagged_data: df_flag = flagged_data["Nilai Negatif"]
+        elif "Overbudget" in modul_name and "Overbudget" in flagged_data: df_flag = flagged_data["Overbudget"]
 
         if not df_flag.empty:
             elements.append(Spacer(1, 5))
@@ -416,17 +369,9 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
             raw_data = [preview_df.columns.tolist()] + preview_df.values.tolist()
             raw_data = [[str(cell) for cell in row] for row in raw_data]
             t_raw = Table(raw_data)
-            t_raw.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ]))
+            t_raw.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey), ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), ('FONTSIZE', (0, 0), (-1, -1), 8)]))
             elements.append(t_raw)
-
         elements.append(Spacer(1, 20))
-
-    elements.append(Paragraph("C. Kesimpulan Auditor", heading_style))
-    elements.append(Paragraph(f"Ditemukan {len(findings_list)} indikasi masalah. Data memerlukan perbaikan dan verifikasi dokumen lebih lanjut.", normal_style))
 
     doc.build(elements)
     buffer.seek(0)
@@ -440,7 +385,6 @@ def finora_header(title, subtitle):
 
 def render_audit_results(all_findings, flagged_data, filename, entitas, periode, score):
     color = "#C62828" if score > 50 else "#EF6C00" if score > 20 else "#2E7D32"
-
     st.markdown(f"""
     <div style="background-color: white; padding: 20px; border-radius: 10px; border: 2px solid #FF5C8B; margin-bottom: 20px;">
         <h2 style="color: #7A1F3D; text-align: center; margin-bottom: 5px;">KERTAS KERJA AUDIT (KKA)</h2>
@@ -459,336 +403,259 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
     tab_kka, tab_grafik, tab_ai = st.tabs(["📝 Laporan Temuan & Bukti", "📊 Visualisasi Grafik", "🤖 Tanya FINORA AI"])
 
     with tab_kka:
-        st.markdown("### A. Ringkasan Temuan (Summary of Findings)")
-
-        summary_data = []
-        for idx, f in enumerate(all_findings, 1):
-            summary_data.append({
-                "No": idx,
-                "Kode Temuan": f"F-{idx:02d}",
-                "Kategori Uji": f["module"],
-                "Tingkat Risiko": f["risk_level"],
-                "Deskripsi Singkat": f["title"]
-            })
-        if summary_data:
-            st.table(pd.DataFrame(summary_data))
-        else:
-            st.info("Tidak ada temuan.")
+        st.markdown("### A. Ringkasan Temuan")
+        summary_data = [{"No": idx, "Kode": f"F-{idx:02d}", "Kategori Uji": f["module"], "Risiko": f["risk_level"], "Deskripsi": f["title"]} for idx, f in enumerate(all_findings, 1)]
+        if summary_data: st.table(pd.DataFrame(summary_data))
+        else: st.info("Tidak ada temuan.")
 
         st.markdown("---")
-        st.markdown("### B. Rincian Temuan, Bukti, dan Rekomendasi")
-        st.info("Klik masing-masing temuan di bawah ini untuk melihat Kondisi, Kriteria, Bukti (Data), dan Rekomendasi.")
-
+        st.markdown("### B. Rincian Temuan")
         for idx, f in enumerate(all_findings, 1):
             with st.expander(f"[{f['risk_level']}] F-{idx:02d}: {f['title']}"):
                 c1, c2 = st.columns([1, 2])
                 with c1:
-                    st.markdown(f"**1. Kondisi (Condition)**\n{f['detail']}")
-                    st.markdown("**2. Kriteria (Criteria)**\nSOP Internal / Prinsip Akuntansi (SAK/PSAK) / Ketentuan Perpajakan.")
+                    st.markdown(f"**1. Kondisi**\n{f['detail']}")
+                    st.markdown("**2. Kriteria**\nSOP Internal / SAK/PSAK.")
                 with c2:
-                    st.markdown("**3. Sebab (Cause)**\nKelemahan sistem kontrol internal atau kesalahan input (human error).")
-                    st.markdown("**4. Akibat (Effect)**\nBerpotensi menimbulkan kerugian finansial, denda, atau laporan keuangan tidak wajar.")
-
-                st.error(f"**5. Rekomendasi Auditor:** {f['recommendation']}")
-
+                    st.markdown("**3. Sebab**\nKelemahan kontrol internal / human error.")
+                    st.markdown("**4. Akibat**\nBerpotensi kerugian finansial / laporan tidak wajar.")
+                st.error(f"**5. Rekomendasi:** {f['recommendation']}")
+                
                 modul_name = f['module']
                 if modul_name in flagged_data and not flagged_data[modul_name].empty:
-                    st.markdown("**📂 Bukti Audit (Data Terindikasi):**")
                     st.dataframe(flagged_data[modul_name].head(10), use_container_width=True)
                 elif "Kelengkapan" in modul_name and "Kelengkapan Kosong" in flagged_data:
-                    st.markdown("**📂 Bukti Audit (Data Kosong):**")
-                    st.dataframe(flagged_data["Kelengkapan Kosong"].head(10), use_container_width=True)
+                     st.dataframe(flagged_data["Kelengkapan Kosong"].head(10), use_container_width=True)
                 elif "Duplikat" in modul_name and "Duplikasi Ekstrem" in flagged_data:
-                    st.markdown("**📂 Bukti Audit (Data Duplikat):**")
-                    st.dataframe(flagged_data["Duplikasi Ekstrem"].head(10), use_container_width=True)
+                     st.dataframe(flagged_data["Duplikasi Ekstrem"].head(10), use_container_width=True)
                 elif "Negatif" in modul_name and "Nilai Negatif" in flagged_data:
-                    st.markdown("**📂 Bukti Audit (Nilai Negatif):**")
-                    st.dataframe(flagged_data["Nilai Negatif"].head(10), use_container_width=True)
+                     st.dataframe(flagged_data["Nilai Negatif"].head(10), use_container_width=True)
                 elif "Overbudget" in modul_name and "Overbudget" in flagged_data:
-                    st.markdown("**📂 Bukti Audit (Overbudget):**")
-                    st.dataframe(flagged_data["Overbudget"].head(10), use_container_width=True)
+                     st.dataframe(flagged_data["Overbudget"].head(10), use_container_width=True)
 
         st.markdown("---")
-        st.markdown("### C. Kesimpulan Auditor")
-        st.warning(f"Ditemukan **{len(all_findings)} indikasi masalah**. Kesimpulan: Data memerlukan perbaikan dan verifikasi dokumen lebih lanjut sebelum dapat disajikan sebagai laporan final.")
-
+        st.warning(f"Ditemukan **{len(all_findings)} indikasi masalah**. Data memerlukan verifikasi lebih lanjut.")
+        
         st.markdown("### 📥 Download Kertas Kerja Audit")
         col1, col2 = st.columns(2)
         excel_buffer = generate_excel(flagged_data, all_findings)
-        col1.download_button(
-            "⬇️ Download Excel (Multi-Sheet)",
-            data=excel_buffer,
-            file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-
+        col1.download_button("⬇️ Download Excel", data=excel_buffer, file_name=f"KKA_{entitas}.xlsx", use_container_width=True)
+        
         pdf_buffer = generate_pdf(entitas, periode, filename, score, all_findings, flagged_data)
-        col2.download_button(
-            "⬇️ Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
+        col2.download_button("⬇️ Download PDF", data=pdf_buffer, file_name=f"KKA_{entitas}.pdf", use_container_width=True)
 
     with tab_grafik:
         if all_findings:
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**Distribusi Tingkat Risiko**")
                 risk_df = pd.DataFrame(all_findings)["risk_level"].value_counts().reset_index()
-                risk_df.columns = ["Tingkat", "Jumlah"]
-                fig_pie = px.pie(risk_df, names="Tingkat", values="Jumlah", color="Tingkat",
-                                 color_discrete_map={"Tinggi": "#C62828", "Sedang": "#EF6C00", "Rendah": "#2E7D32"}, hole=0.4)
+                fig_pie = px.pie(risk_df, names="risk_level", values="count", color="risk_level", color_discrete_map={"Tinggi": "#C62828", "Sedang": "#EF6C00", "Rendah": "#2E7D32"}, hole=0.4)
                 st.plotly_chart(fig_pie, use_container_width=True)
-
             with c2:
-                st.markdown("**Prosedur Audit yang Menemukan Indikasi**")
                 mod_df = pd.DataFrame(all_findings)["module"].value_counts().reset_index()
-                mod_df.columns = ["Modul", "Jumlah"]
-                fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
+                fig_bar = px.bar(mod_df, x="count", y="module", orientation='h', color_discrete_sequence=["#FF5C8B"])
                 st.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            st.info("Belum ada data untuk divisualisasikan.")
+        else: st.info("Belum ada data.")
 
     with tab_ai:
         st.markdown("### 🤖 Tanya FINORA AI")
-        st.info("Tanyakan analisis mendalam seputar temuan audit ini. AI akan menjawab berdasarkan data KKA di atas.")
-
-        context_text = f"Entitas: {entitas} | Periode: {periode} | Skor: {score}/100\nTemuan:\n"
-        for idx, f in enumerate(all_findings, 1):
-            context_text += f"- [{f['risk_level']}] {f['module']} ({f['title']})\n"
-
-        if "ai_chat_history" not in st.session_state:
-            st.session_state.ai_chat_history = []
-
+        context_text = f"Entitas: {entitas} | Skor: {score}/100\nTemuan:\n" + "".join([f"- [{f['risk_level']}] {f['module']} ({f['title']})\n" for f in all_findings])
+        if "ai_chat_history" not in st.session_state: st.session_state.ai_chat_history = []
         for msg in st.session_state.ai_chat_history:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
+            with st.chat_message(msg["role"]): st.markdown(msg["content"])
         with st.form(key="ai_chat_form", clear_on_submit=True):
-            prompt = st.text_input("Tulis pertanyaan Anda di sini...")
-            submit_button = st.form_submit_button(label="Kirim ke AI", use_container_width=True)
-
-            if submit_button and prompt:
+            prompt = st.text_input("Tulis pertanyaan audit Anda...")
+            if st.form_submit_button("Kirim ke AI", use_container_width=True) and prompt:
                 st.session_state.ai_chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("assistant"):
-                    response = st.write_stream(ask_gemini_stream(prompt, context_text))
+                with st.chat_message("assistant"): response = st.write_stream(ask_gemini_stream(prompt, context_text))
                 st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
                 st.rerun()
 
 # ============================================================
-# LANDING PAGE (HALAMAN DEPAN)
-# ============================================================
-def page_landing():
-    # Sembunyikan sidebar & menu navigasi saat di halaman depan
-    st.markdown("""
-        <style>
-            [data-testid="collapsedControl"] { display: none; }
-            [data-testid="stSidebar"] { display: none; }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # Hero Section
-    col_img1, col_img2, col_img3 = st.columns([1, 1.5, 1])
-    with col_img2:
-        try:
-            # Ukuran logo di halaman depan dibuat 250px agar ideal
-            st.image(LOGO_FILENAME, width=250)
-        except Exception:
-            st.markdown("<h1 style='text-align:center; font-size: 5rem;'>💗</h1>", unsafe_allow_html=True)
-
-    st.markdown("""
-    <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #FFF0F4 0%, #FFF5E8 100%); border-radius: 20px; margin-bottom: 40px; border: 2px solid #FF5C8B; box-shadow: 0 10px 30px rgba(255, 92, 139, 0.15);">
-        <h1 style="color: #7A1F3D; font-size: 3.5rem; margin-bottom: 15px; font-weight: 800;">FINORA AI</h1>
-        <p style="color: #2D1B24; font-size: 1.3rem; max-width: 800px; margin: 0 auto; line-height: 1.6;">
-            Platform Kecerdasan Finansial untuk mendeteksi anomali dan menyusun <b>Kertas Kerja Audit (KKA)</b> secara otomatis dalam hitungan detik.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Fitur Section
-    st.markdown("<h2 style='text-align: center; color: #7A1F3D; margin-bottom: 30px; font-weight: 700;'>Bagaimana FINORA Bekerja?</h2>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("""
-        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; height: 100%; border-top: 5px solid #FF5C8B; transition: transform 0.3s;">
-            <div style="font-size: 3rem; margin-bottom: 15px;">📤</div>
-            <h3 style="color: #7A1F3D; margin-bottom: 10px;">1. Upload Data</h3>
-            <p style="color: #555; font-size: 0.95rem;">Cukup unggah file Excel atau CSV laporan keuangan Anda. Sistem kami akan langsung membaca dan mendeteksi kolom secara otomatis.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; height: 100%; border-top: 5px solid #FF5C8B; transition: transform 0.3s;">
-            <div style="font-size: 3rem; margin-bottom: 15px;">🧠</div>
-            <h3 style="color: #7A1F3D; margin-bottom: 10px;">2. AI Auto-Detect</h3>
-            <p style="color: #555; font-size: 0.95rem;">Kecerdasan buatan kami menguji data dan mendeteksi anomali seperti data kosong, duplikat, overbudget, outlier, dan kata kunci mencurigakan.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; height: 100%; border-top: 5px solid #FF5C8B; transition: transform 0.3s;">
-            <div style="font-size: 3rem; margin-bottom: 15px;">📑</div>
-            <h3 style="color: #7A1F3D; margin-bottom: 10px;">3. Laporan KKA Instan</h3>
-            <p style="color: #555; font-size: 0.95rem;">Hasilkan Kertas Kerja Audit profesional lengkap dengan bukti dan rekomendasi. Siap diunduh dalam format PDF atau Excel.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<br><br><br>", unsafe_allow_html=True)
-
-    # Call to Action (Tombol Mulai)
-    col_cta1, col_cta2, col_cta3 = st.columns([1, 2, 1])
-    with col_cta2:
-        st.markdown("""
-        <style>
-        .stButton > button {
-            background: linear-gradient(135deg, #FF5C8B 0%, #7A1F3D 100%) !important;
-            color: white !important;
-            font-size: 1.3rem !important;
-            padding: 20px 30px !important;
-            border-radius: 12px !important;
-            border: none !important;
-            font-weight: 800 !important;
-            box-shadow: 0 6px 20px rgba(255, 92, 139, 0.4) !important;
-            transition: all 0.3s ease !important;
-            width: 100%;
-        }
-        .stButton > button:hover {
-            transform: translateY(-3px) !important;
-            box-shadow: 0 8px 25px rgba(255, 92, 139, 0.6) !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        if st.button("🚀 START YOUR ANALYSIS", use_container_width=True):
-            st.session_state.app_started = True
-            st.rerun()
-
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888; font-size: 0.9rem;'>Ditenagai oleh Google Gemini 3.8 Flash | FINORA Financial Intelligence</p>", unsafe_allow_html=True)
-
-
-# ============================================================
-# PAGES (DASHBOARD, AUDIT, SIMPAN)
+# HALAMAN AUDIT PROFESIONAL
 # ============================================================
 def page_audit():
-    finora_header("Audit Profesional", "Sistem deteksi otomatis (Laporan Pemerintah, Perusahaan, Pembelian, Penjualan)")
-
+    finora_header("Audit Profesional", "Sistem deteksi otomatis anomali transaksi")
     with st.container():
         st.markdown("### 1. Upload Data")
         c1, c2 = st.columns([3, 1])
-        uploaded = c1.file_uploader("Upload File Excel/CSV", type=["xlsx", "csv"])
-        header_row = c2.number_input("Header di baris ke-", min_value=0, value=0,
-                                     help="Ubah ke 1 atau 2 jika baris pertama Excel adalah Judul.")
+        uploaded = c1.file_uploader("Upload File Excel/CSV", type=["xlsx", "csv"], key="audit_upload")
+        header_row = c2.number_input("Header di baris ke-", min_value=0, value=0, key="audit_header")
 
     if uploaded:
         df = pd.read_excel(uploaded, header=header_row) if uploaded.name.endswith('xlsx') else pd.read_csv(uploaded, header=header_row)
-
         detected = auto_detect_columns(df)
-
-        st.markdown("### 2. Pemetaan Kolom (AI Auto-Detect)")
-        st.success("✨ FINORA AI telah mendeteksi otomatis kolom pada file kamu. Jika ada yang salah, silakan koreksi di menu di bawah.")
-
-        with st.expander("⚙️ Lihat / Koreksi Pemetaan Kolom"):
+        
+        st.markdown("### 2. Pemetaan Kolom")
+        with st.expander("⚙️ Koreksi Pemetaan Kolom", expanded=False):
             c1, c2 = st.columns(2)
-            date_col = c1.selectbox("Kolom Tanggal", [""] + list(df.columns),
-                                    index=list(df.columns).index(detected["date"]) + 1 if detected["date"] else 0)
-            desc_col = c2.selectbox("Kolom Deskripsi/Kategori", [""] + list(df.columns),
-                                    index=list(df.columns).index(detected["desc"]) + 1 if detected["desc"] else 0)
-
+            date_col = c1.selectbox("Kolom Tanggal", [""] + list(df.columns), index=list(df.columns).index(detected["date"])+1 if detected["date"] else 0)
+            desc_col = c2.selectbox("Kolom Deskripsi", [""] + list(df.columns), index=list(df.columns).index(detected["desc"])+1 if detected["desc"] else 0)
             c3, c4, c5 = st.columns(3)
-            amount_col = c3.selectbox("Kolom Nominal/Actual", [""] + list(df.columns),
-                                      index=list(df.columns).index(detected["amount"]) + 1 if detected["amount"] else 0)
-            budget_col = c4.selectbox("Kolom Anggaran/Pagu (Opsional)", [""] + list(df.columns),
-                                      index=list(df.columns).index(detected["budget"]) + 1 if detected["budget"] else 0)
-            invoice_col = c5.selectbox("Kolom No. Faktur/Invoice (Opsional)", [""] + list(df.columns),
-                                       index=list(df.columns).index(detected["invoice"]) + 1 if detected["invoice"] else 0)
+            amount_col = c3.selectbox("Kolom Nominal", [""] + list(df.columns), index=list(df.columns).index(detected["amount"])+1 if detected["amount"] else 0)
+            budget_col = c4.selectbox("Kolom Anggaran", [""] + list(df.columns), index=list(df.columns).index(detected["budget"])+1 if detected["budget"] else 0)
+            invoice_col = c5.selectbox("Kolom No. Faktur", [""] + list(df.columns), index=list(df.columns).index(detected["invoice"])+1 if detected["invoice"] else 0)
 
-            c6, c7 = st.columns(2)
-            debit_col = c6.selectbox("Kolom Debit (Opsional)", [""] + list(df.columns),
-                                     index=list(df.columns).index(detected["debit"]) + 1 if detected["debit"] else 0)
-            credit_col = c7.selectbox("Kolom Kredit (Opsional)", [""] + list(df.columns),
-                                      index=list(df.columns).index(detected["credit"]) + 1 if detected["credit"] else 0)
-
-        st.markdown("### 3. Informasi Kertas Kerja Audit (KKA)")
+        st.markdown("### 3. Informasi KKA")
         c_kka1, c_kka2 = st.columns(2)
-        entitas = c_kka1.text_input("Nama Entitas / Perusahaan", placeholder="Contoh: PT Maju Jaya / Pemkot X")
-        periode = c_kka2.text_input("Periode Audit", placeholder="Contoh: Tahun Buku 2024")
-
-        st.markdown("### 4. Jalankan Prosedur Audit")
-        st.info("Sistem akan memindahkan data, menguji sampel, dan menyusun Kertas Kerja Audit.")
-
+        entitas = c_kka1.text_input("Nama Entitas / Perusahaan", placeholder="Contoh: PT Maju Jaya", key="audit_entitas")
+        periode = c_kka2.text_input("Periode Audit", placeholder="Contoh: Tahun Buku 2024", key="audit_periode")
+        
+        st.markdown("### 4. Jalankan Prosedur")
         if st.button("🚀 JALANKAN PROSEDUR AUDIT", use_container_width=True):
             with st.spinner("Memproses data..."):
                 all_findings = []
                 flagged_data = {}
-
-                cols_to_check = [c for c in [date_col, amount_col or debit_col, desc_col] if c]
-                f, flag = audit_empty(df, cols_to_check)
-                all_findings.extend(f); flagged_data["Kelengkapan Kosong"] = flag
-
-                subset_dup = [c for c in [date_col, amount_col or debit_col, desc_col, invoice_col] if c]
-                f, flag = audit_duplicates(df, subset_dup)
-                all_findings.extend(f); flagged_data["Duplikasi Ekstrem"] = flag
-
+                
+                cols_to_check = [c for c in [date_col, amount_col, desc_col] if c]
+                f, flag = audit_empty(df, cols_to_check); all_findings.extend(f); flagged_data["Kelengkapan Kosong"] = flag
+                
+                subset_dup = [c for c in [date_col, amount_col, desc_col, invoice_col] if c]
+                f, flag = audit_duplicates(df, subset_dup); all_findings.extend(f); flagged_data["Duplikasi Ekstrem"] = flag
+                
                 if date_col:
-                    f, flag = audit_weekend(df, date_col)
-                    all_findings.extend(f); flagged_data["Transaksi Weekend"] = flag
-
+                    f, flag = audit_weekend(df, date_col); all_findings.extend(f); flagged_data["Transaksi Weekend"] = flag
                 if desc_col:
-                    f, flag = audit_suspicious_words(df, desc_col)
-                    all_findings.extend(f); flagged_data["Kata Kunci"] = flag
-
+                    f, flag = audit_suspicious_words(df, desc_col); all_findings.extend(f); flagged_data["Kata Kunci"] = flag
                 if amount_col:
-                    f, flag = audit_negative(df, amount_col)
-                    all_findings.extend(f); flagged_data["Nilai Negatif"] = flag
-
-                    f, flag = audit_outliers_iqr(df, amount_col)
-                    all_findings.extend(f); flagged_data["Outlier IQR"] = flag
-
+                    f, flag = audit_negative(df, amount_col); all_findings.extend(f); flagged_data["Nilai Negatif"] = flag
+                    f, flag = audit_outliers_iqr(df, amount_col); all_findings.extend(f); flagged_data["Outlier IQR"] = flag
                 if budget_col and amount_col:
-                    f, flag = audit_overbudget(df, budget_col, amount_col)
-                    all_findings.extend(f); flagged_data["Overbudget"] = flag
+                    f, flag = audit_overbudget(df, budget_col, amount_col); all_findings.extend(f); flagged_data["Overbudget"] = flag
 
                 high_count = sum(1 for f in all_findings if f["risk_level"] == "Tinggi")
                 med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
                 score = min(100, (high_count * 20) + (med_count * 10))
 
                 st.session_state['audit_results'] = {
-                    "findings": all_findings,
-                    "flagged": flagged_data,
-                    "filename": uploaded.name,
-                    "entitas": entitas,
-                    "periode": periode,
-                    "score": score
+                    "findings": all_findings, "flagged": flagged_data, "filename": uploaded.name,
+                    "entitas": entitas, "periode": periode, "score": score
                 }
-
                 st.session_state.ai_chat_history = []
 
                 flagged_json = {k: v.to_dict(orient="records") for k, v in flagged_data.items() if not v.empty}
-                summary_to_save = {
-                    "total_findings": len(all_findings),
-                    "score": score,
-                    "entitas": entitas,
-                    "periode": periode,
-                    "flagged_data": flagged_json
-                }
+                summary_to_save = {"total_findings": len(all_findings), "score": score, "entitas": entitas, "periode": periode, "flagged_data": flagged_json}
                 fid = save_file(uploaded.name, uploaded.getvalue())
                 aid = save_analysis(fid, "Audit Profesional", ["audit_v5"], summary_to_save)
                 save_findings(aid, all_findings)
-                st.success(f"💾 KKA untuk **{entitas}** berhasil diarsipkan (ID #{aid}).")
+                st.success(f"💾 KKA untuk **{entitas}** berhasil disimpan (ID #{aid}).")
 
     if 'audit_results' in st.session_state:
         res = st.session_state['audit_results']
         st.markdown("---")
-        render_audit_results(
-            res["findings"], res["flagged"], res["filename"],
-            res["entitas"], res["periode"], res["score"]
-        )
+        render_audit_results(res["findings"], res["flagged"], res["filename"], res["entitas"], res["periode"], res["score"])
 
+# ============================================================
+# HALAMAN ANALISIS KEUANGAN (FITUR BARU)
+# ============================================================
+def page_financial_analysis():
+    finora_header("Analisis Laporan Keuangan", "Evaluasi Kesehatan Finansial & Prospek (Perusahaan / Pemerintahan)")
+    
+    st.markdown("### 1. Upload Laporan Keuangan")
+    c1, c2 = st.columns([2, 1])
+    uploaded_fin = c1.file_uploader("Upload File Excel/CSV Laporan Keuangan", type=["xlsx", "csv"], key="fin_upload")
+    entity_type = c2.selectbox("Jenis Entitas", ["Perusahaan Swasta / Tbk", "Pemerintahan / BLU"])
+
+    if uploaded_fin:
+        df_fin = pd.read_excel(uploaded_fin) if uploaded_fin.name.endswith('xlsx') else pd.read_csv(uploaded_fin)
+        detected_fin = auto_detect_fin_columns(df_fin)
+        
+        st.markdown("### 2. Pemetaan Kolom Laporan Keuangan")
+        with st.expander("⚙️ Konfigurasi Kolom Keuangan", expanded=True):
+            f_c1, f_c2, f_c3 = st.columns(3)
+            col_pendapatan = f_c1.selectbox("Pendapatan / Penjualan", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["pendapatan"])+1 if detected_fin["pendapatan"] else 0)
+            col_laba = f_c2.selectbox("Laba Bersih / Surplus", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["laba"])+1 if detected_fin["laba"] else 0)
+            col_ekuitas = f_c3.selectbox("Total Ekuitas / Kekayaan", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["ekuitas"])+1 if detected_fin["ekuitas"] else 0)
+            
+            f_c4, f_c5, f_c6 = st.columns(3)
+            col_aset = f_c4.selectbox("Total Aset", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["total_aset"])+1 if detected_fin["total_aset"] else 0)
+            col_liab = f_c5.selectbox("Total Liabilitas / Utang", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["total_liabilitas"])+1 if detected_fin["total_liabilitas"] else 0)
+            
+            f_c7, f_c8 = st.columns(2)
+            col_aset_lancar = f_c7.selectbox("Aset Lancar", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["aset_lancar"])+1 if detected_fin["aset_lancar"] else 0)
+            col_liab_lancar = f_c8.selectbox("Liabilitas Jangka Pendek", [""] + list(df_fin.columns), index=list(df_fin.columns).index(detected_fin["liabilitas_lancar"])+1 if detected_fin["liabilitas_lancar"] else 0)
+
+        map_col = {
+            "pendapatan": col_pendapatan, "laba": col_laba, "ekuitas": col_ekuitas,
+            "total_aset": col_aset, "total_liabilitas": col_liab,
+            "aset_lancar": col_aset_lancar, "liabilitas_lancar": col_liab_lancar
+        }
+
+        if st.button("📊 ANALISIS KEUANGAN SEKARANG", use_container_width=True):
+            with st.spinner("Menghitung rasio dan menyiapkan laporan..."):
+                rasio, nilai_utama = hitung_rasio(df_fin, map_col)
+                st.session_state['fin_results'] = {"rasio": rasio, "nilai": nilai_utama, "entity_type": entity_type}
+
+    if 'fin_results' in st.session_state:
+        res = st.session_state['fin_results']
+        rasio = res["rasio"]; nilai = res["nilai"]
+        
+        st.markdown("---")
+        tab_rasio, tab_grafik, tab_ai_advisor = st.tabs(["📊 Ringkasan Rasio", "📈 Visualisasi & Prospek", "🧠 AI Financial Advisor"])
+        
+        with tab_rasio:
+            st.markdown(f"### Kesehatan Finansial: **{res['entity_type']}**")
+            if not rasio:
+                st.warning("Data tidak cukup untuk menghitung rasio. Pastikan kolom sudah benar.")
+            else:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Pendapatan", f"Rp {nilai.get('Pendapatan', 0):,.0f}")
+                m2.metric("Laba Bersih", f"Rp {nilai.get('Laba', 0):,.0f}")
+                m3.metric("Total Aset", f"Rp {nilai.get('Total Aset', 0):,.0f}")
+                m4.metric("Ekuitas", f"Rp {nilai.get('Ekuitas', 0):,.0f}")
+                
+                st.markdown("#### Rasio Keuangan Utama")
+                r1, r2, r3, r4, r5 = st.columns(5)
+                r1.metric("Current Ratio", f"{rasio.get('Current Ratio (x)', 0)} x", help="Aset Lancar / Liabilitas Lancar. (Ideal: >1.5)")
+                r2.metric("Net Profit Margin", f"{rasio.get('Net Profit Margin (%)', 0)} %", help="Laba Bersih / Pendapatan.")
+                r3.metric("ROA", f"{rasio.get('ROA (%)', 0)} %", help="Laba Bersih / Total Aset.")
+                r4.metric("ROE", f"{rasio.get('ROE (%)', 0)} %", help="Laba Bersih / Ekuitas.")
+                r5.metric("Debt to Equity", f"{rasio.get('Debt to Equity (x)', 0)} x", help="Total Utang / Ekuitas. (Ideal: <2.0)")
+
+        with tab_grafik:
+            st.markdown("### Analisis Visual Prospek")
+            if nilai.get('Pendapatan', 0) > 0 or nilai.get('Total Aset', 0) > 0:
+                fig_bar = go.Figure(data=[
+                    go.Bar(name='Pendapatan', x=['Keuangan'], y=[nilai.get('Pendapatan', 0)], marker_color='#FF5C8B'),
+                    go.Bar(name='Laba Bersih', x=['Keuangan'], y=[nilai.get('Laba', 0)], marker_color='#7A1F3D')
+                ])
+                fig_bar.update_layout(barmode='group', title="Pendapatan vs Laba Bersih", height=400)
+                st.plotly_chart(fig_bar, use_container_width=True)
+                
+                fig_pie = px.pie(
+                    names=["Liabilitas", "Ekuitas"], values=[nilai.get('Total Liabilitas', 0), nilai.get('Ekuitas', 0)],
+                    title="Struktur Pendanaan (Utang vs Modal)", color_discrete_sequence=['#EF6C00', '#2E7D32']
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("Grafik tidak dapat ditampilkan karena data nominal kosong.")
+
+        with tab_ai_advisor:
+            st.markdown("### 🤖 AI Financial Advisor")
+            st.info("AI akan menganalisis prospek dan kesehatan finansial berdasarkan rasio di atas.")
+            
+            if st.button("Buat Laporan Analisis AI", use_container_width=True):
+                context_ai = f"""
+                Jenis Entitas: {res['entity_type']}
+                Pendapatan: Rp {nilai.get('Pendapatan', 0):,.0f}, Laba Bersih: Rp {nilai.get('Laba', 0):,.0f}
+                Total Aset: Rp {nilai.get('Total Aset', 0):,.0f}, Total Liabilitas: Rp {nilai.get('Total Liabilitas', 0):,.0f}, Ekuitas: Rp {nilai.get('Ekuitas', 0):,.0f}
+                Rasio: Current Ratio {rasio.get('Current Ratio (x)', 0)}x, NPM {rasio.get('Net Profit Margin (%)', 0)}%, ROA {rasio.get('ROA (%)', 0)}%, ROE {rasio.get('ROE (%)', 0)}%, DER {rasio.get('Debt to Equity (x)', 0)}x
+                """
+                prompt_ai = f"""
+                Berdasarkan data {res['entity_type']} di atas, berikan analisis komprehensif dengan format:
+                1. **Kesimpulan Kesehatan Finansial** (Sehat / Cukup / Berisiko).
+                2. **Analisis Likuiditas & Solvabilitas**.
+                3. **Analisis Profitabilitas**.
+                4. **Prospek & Rekomendasi Strategis**.
+                Gunakan bahasa profesional, tajam, dan mudah dipahami eksekutif.
+                """
+                with st.chat_message("assistant"):
+                    response = st.write_stream(ask_gemini_stream(prompt_ai, context_ai, system_role="Analis Keuangan & Konsultan Bisnis Senior"))
+                st.success("Analisis AI Selesai. Anda bisa menyalin teks di atas untuk laporan.")
+
+# ============================================================
+# HALAMAN LAINNYA (DASHBOARD, SIMPAN, LANDING)
+# ============================================================
 def page_dashboard():
     finora_header("Dashboard", "Ringkasan seluruh aktivitas FINORA AI")
     conn = get_conn()
@@ -815,57 +682,96 @@ def page_simpan():
     finora_header("Pusat Laporan & Arsip", "Riwayat analisis dan Kertas Kerja Audit tersimpan")
     df = fetch_analyses()
     if df.empty:
-        st.info("Belum ada riwayat.")
-        return
+        st.info("Belum ada riwayat."); return
     st.dataframe(df, use_container_width=True)
 
     st.markdown("---")
     aid = st.selectbox("Pilih ID Analisis untuk membuka KKA lengkap", df["id"].tolist())
-
     if aid:
         an = fetch_analysis_by_id(aid)
         if an:
             summary_data = json.loads(an["summary_json"])
-
             entitas = summary_data.get("entitas", "-")
             periode = summary_data.get("periode", "-")
             score = summary_data.get("score", 0)
             raw_flagged = summary_data.get("flagged_data", {})
             flagged_data = {k: pd.DataFrame(v) for k, v in raw_flagged.items()}
-
+            
             findings_df = fetch_findings(aid)
             findings_list = findings_df.to_dict("records")
-
             render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score)
+
+def page_landing():
+    st.markdown("""<style>[data-testid="collapsedControl"], [data-testid="stSidebar"] { display: none; }</style>""", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    with col2:
+        if os.path.exists(LOGO_FILENAME):
+            st.image(LOGO_FILENAME, width=250)
+        else:
+            st.markdown("<h1 style='text-align:center; font-size: 5rem;'>💗</h1>", unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #FFF0F4 0%, #FFF5E8 100%); border-radius: 20px; margin-bottom: 40px; border: 2px solid #FF5C8B; box-shadow: 0 10px 30px rgba(255, 92, 139, 0.15);">
+        <h1 style="color: #7A1F3D; font-size: 3.5rem; margin-bottom: 15px; font-weight: 800;">FINORA AI</h1>
+        <p style="color: #2D1B24; font-size: 1.3rem; max-width: 800px; margin: 0 auto; line-height: 1.6;">
+            Platform Kecerdasan Finansial untuk mendeteksi anomali (Audit) dan menyusun <b>Kertas Kerja Audit (KKA)</b> serta <b>Analisis Laporan Keuangan</b> secara otomatis.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<h2 style='text-align: center; color: #7A1F3D; margin-bottom: 30px; font-weight: 700;'>Dua Senjata Utama FINORA</h2>", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; border-top: 5px solid #FF5C8B;">
+            <div style="font-size: 3rem; margin-bottom: 15px;">🔎</div>
+            <h3 style="color: #7A1F3D; margin-bottom: 10px;">Audit Profesional</h3>
+            <p style="color: #555; font-size: 0.95rem;">Mendeteksi duplikasi, transaksi weekend, overbudget, outlier, dan anomali lainnya. Hasil siap diunduh dalam format KKA (PDF & Excel).</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("""
+        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; border-top: 5px solid #FF5C8B;">
+            <div style="font-size: 3rem; margin-bottom: 15px;">📈</div>
+            <h3 style="color: #7A1F3D; margin-bottom: 10px;">Analisis Keuangan</h3>
+            <p style="color: #555; font-size: 0.95rem;">Hitung rasio (Likuiditas, Profitabilitas, Solvabilitas) dan dapatkan *insight* prospek bisnis/pemerintahan dari AI Financial Advisor.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    col_cta1, col_cta2, col_cta3 = st.columns([1, 2, 1])
+    with col_cta2:
+        st.markdown("""<style>.stButton > button { background: linear-gradient(135deg, #FF5C8B 0%, #7A1F3D 100%) !important; color: white !important; font-size: 1.3rem !important; padding: 20px 30px !important; border-radius: 12px !important; border: none !important; font-weight: 800 !important; box-shadow: 0 6px 20px rgba(255, 92, 139, 0.4) !important; transition: all 0.3s ease !important; width: 100%; }</style>""", unsafe_allow_html=True)
+        if st.button("🚀 START YOUR ANALYSIS", use_container_width=True):
+            st.session_state.app_started = True
+            st.rerun()
 
 # ============================================================
 # MAIN (LOGIC ROUTING)
 # ============================================================
 def main():
-    # Inisialisasi state untuk halaman depan
     if "app_started" not in st.session_state:
         st.session_state.app_started = False
 
-    # Jika belum mulai, tampilkan Landing Page
     if not st.session_state.app_started:
         page_landing()
-    
-    # Jika sudah klik "Start", tampilkan Sidebar dan Aplikasi Utama
     else:
         try:
-            # Ukuran logo di sidebar dibuat 180px agar pas
             st.sidebar.image(LOGO_FILENAME, width=180)
-        except Exception:
+        except:
             st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
             
         st.sidebar.markdown('<p style="text-align:center;font-size:12px;color:#7A1F3D;">Financial Intelligence<br>Platform</p>', unsafe_allow_html=True)
         st.sidebar.markdown("---")
 
-        nav = st.sidebar.radio("Navigasi", ["Dashboard", "Audit Profesional", "Simpan"])
+        nav = st.sidebar.radio("Navigasi", [
+            "Dashboard", 
+            "Audit Profesional", 
+            "Analisis Keuangan", 
+            "Simpan"
+        ])
 
         st.sidebar.markdown("---")
-        
-        # Tombol untuk kembali ke Landing Page
         if st.sidebar.button("🏠 Kembali ke Halaman Depan", use_container_width=True):
             st.session_state.app_started = False
             st.rerun()
@@ -876,6 +782,8 @@ def main():
             page_dashboard()
         elif nav == "Audit Profesional":
             page_audit()
+        elif nav == "Analisis Keuangan":
+            page_financial_analysis()
         elif nav == "Simpan":
             page_simpan()
 
