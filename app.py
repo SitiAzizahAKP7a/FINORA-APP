@@ -9,6 +9,7 @@ import hashlib
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
+import google.generativeai as genai
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -100,6 +101,35 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
+# AI ENGINE (GEMINI)
+# ============================================================
+def ask_gemini(prompt, audit_context):
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+        if not api_key:
+            return "⚠️ API Key Gemini belum diatur. Silakan tambahkan `GEMINI_API_KEY` di menu Secrets Streamlit."
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash") # Menggunakan model tercepat
+        
+        full_prompt = f"""
+        Kamu adalah FINORA AI, seorang Asisten Auditor Profesional.
+        Tugasmu adalah membantu auditor menganalisis data berdasarkan Kertas Kerja Audit (KKA) di bawah ini.
+        Jawab dengan bahasa profesional, ringkas, dan berfokus pada temuan audit.
+        Jangan pernah mengarang data. Jika informasi tidak ada di konteks, katakan "Data tidak tersedia dalam KKA".
+
+        [KONTEKS KKA]
+        {audit_context}
+
+        [PERTANYAAN AUDITOR]
+        {prompt}
+        """
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        return f"Terjadi kesalahan saat menghubungi AI: {str(e)}"
+
+# ============================================================
 # SMART AUTO-DETECT COLUMNS
 # ============================================================
 def auto_detect_columns(df):
@@ -123,7 +153,7 @@ def auto_detect_columns(df):
     return mapping
 
 # ============================================================
-# AUDIT ENGINE V5 (SMART & VERSATILE)
+# AUDIT ENGINE V5
 # ============================================================
 def audit_empty(df, cols_to_check):
     findings, flagged = [], pd.DataFrame()
@@ -350,7 +380,8 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
     </div>
     """, unsafe_allow_html=True)
     
-    tab_kka, tab_grafik = st.tabs(["📝 Laporan Temuan & Bukti", "📊 Visualisasi Grafik"])
+    # TAMBAHAN TAB AI
+    tab_kka, tab_grafik, tab_ai = st.tabs(["📝 Laporan Temuan & Bukti", "📊 Visualisasi Grafik", "🤖 Tanya FINORA AI"])
     
     with tab_kka:
         st.markdown("### A. Ringkasan Temuan (Summary of Findings)")
@@ -408,7 +439,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
         excel_buffer = generate_excel(flagged_data, all_findings)
         col1.download_button("⬇️ Download Excel (Multi-Sheet)", data=excel_buffer, file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         
-        # PEMANGGILAN PDF SUDAH DIPERBAIKI
         pdf_buffer = generate_pdf(entitas, periode, filename, score, all_findings, flagged_data)
         col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
         
@@ -438,6 +468,35 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             mod_df.columns = ["Modul", "Jumlah"]
             fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
             st.plotly_chart(fig_bar, use_container_width=True)
+
+    # LOGIKA CHAT AI
+    with tab_ai:
+        st.markdown("### 🤖 Tanya FINORA AI")
+        st.info("Tanyakan analisis mendalam seputar temuan audit ini. AI akan menjawab berdasarkan data KKA di atas.")
+        
+        # Siapkan konteks untuk AI
+        context_text = f"Nama Entitas: {entitas}\nPeriode: {periode}\nSkor Risiko: {score}/100\n\nDaftar Temuan:\n"
+        for idx, f in enumerate(all_findings, 1):
+            context_text += f"{idx}. [{f['risk_level']}] {f['module']}: {f['title']}. {f['detail']}\n"
+        
+        # Session state untuk chat
+        if "ai_messages" not in st.session_state:
+            st.session_state.ai_messages = []
+            
+        for msg in st.session_state.ai_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                
+        if prompt := st.chat_input("Tanya AI tentang hasil audit ini..."):
+            st.session_state.ai_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+                
+            with st.chat_message("assistant"):
+                with st.spinner("FINORA AI sedang menganalisis..."):
+                    response = ask_gemini(prompt, context_text)
+                    st.markdown(response)
+            st.session_state.ai_messages.append({"role": "assistant", "content": response})
 
 # ============================================================
 # PAGES
