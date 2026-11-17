@@ -45,6 +45,18 @@ h1, h2, h3 { color: var(--finora-burgundy); }
 }
 .metric-card p { color: #555; font-size: 14px; margin: 0; font-weight: 600; }
 .metric-card h3 { color: #7A1F3D; margin: 5px 0 0 0; font-size: 24px; font-weight: 700; }
+/* CSS Kotak Analisis */
+.insight-box {
+    background-color: white;
+    padding: 20px;
+    border-radius: 10px;
+    border-left: 5px solid #FF5C8B;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+}
+.insight-box h4 { margin-top: 0; color: #7A1F3D; font-size: 18px; margin-bottom: 10px; }
+.insight-box p { margin-bottom: 8px; font-size: 14px; line-height: 1.5; }
+.insight-box .label { font-weight: bold; color: #FF5C8B; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -330,7 +342,7 @@ def auto_extract_financials(df, entity_type):
         ang_b = get_total(ang_col, ['total belanja', 'jumlah belanja', 'belanja daerah', 'belanja'])
         if ang_b == 0: ang_b = get_total(ang_col, [], ['belanja operasi', 'belanja modal', 'belanja tak terduga'])
 
-        # PAD (Pendapatan Asli Daerah) - Pencarian lebih agresif
+        # PAD
         pad = get_total(real_col, ['pendapatan asli daerah', 'jumlah pendapatan asli daerah', 'total pendapatan asli daerah', 'pad'], ['pendapatan asli daerah'])
 
         # Surplus
@@ -383,21 +395,84 @@ def hitung_rasio_dari_nilai(nilai, entity_type):
         rasio["Debt to Equity (x)"] = round(total_liab / ekuitas, 2) if ekuitas > 0 else 0.0
     return rasio
 
-def get_ratio_insight(ratio_name, val):
-    """Memberikan penjelasan, penyebab, dan rekomendasi berdasarkan nilai rasio."""
+def get_detailed_insight(ratio_name, val):
+    """Memberikan penjelasan panjang (Kondisi, Sebab, Akibat, Rekomendasi)."""
     if "Efektivitas" in ratio_name:
-        if val >= 100: return "**Sangat Baik.** Target pendapatan tercapai atau terlampaui. **Saran:** Pertahankan kinerja dan eksplorasi sumber pendapatan baru."
-        elif val >= 90: return "**Baik.** Target hampir tercapai. **Saran:** Tingkatkan pengawasan kepatuhan wajib pajak/retribusi."
-        else: return "**Kurang.** Target tidak tercapai. **Sebab:** Potensi penurunan ekonomi atau wajib pajak mangkir. **Saran:** Lakukan intensifikasi (pemeriksaan pajak) dan ekstensifikasi (subjek pajak baru)."
+        if val >= 100:
+            return """**Kondisi:** Sangat Baik. Realisasi melampaui target anggaran.<br>
+            **Sebab:** Kinerja pemungutan pajak/retribusi yang optimal, kepatuhan wajib pajak tinggi, atau pertumbuhan ekonomi daerah yang positif.<br>
+            **Dampak:** Meningkatkan kapasitas fiskal dan ruang belanja daerah.<br>
+            **Rekomendasi:** Pertahankan sistem pemungutan yang ada. Mulai eksplorasi sumber PAD baru (digitalisasi retribusi, potensi pariwisata) agar tidak *over-reliance* pada satu sektor."""
+        elif val >= 90:
+            return """**Kondisi:** Baik. Realisasi hampir mencapai target.<br>
+            **Sebab:** Pemungutan berjalan sesuai rencana, meski ada sedikit hambatan administratif.<br>
+            **Dampak:** Keuangan daerah stabil.<br>
+            **Rekomendasi:** Tingkatkan pengawasan kepatuhan wajib pajak/retribusi. Lakukan audit internal ringan untuk memastikan tidak ada kebocoran pendapatan di lapangan."""
+        else:
+            return """**Kondisi:** Kurang. Target pendapatan tidak tercapai secara signifikan.<br>
+            **Sebab:** Target anggaran terlalu tinggi (tidak realistis), penurunan aktivitas ekonomi, atau lemahnya penegakan hukum pajak/retribusi.<br>
+            **Dampak:** Defisit anggaran, program pembangunan terhambat, dan berpotensi memotong belanja modal.<br>
+            **Rekomendasi:** Lakukan **Intensifikasi** (pemeriksaan pajak, penagihan aktif) dan **Ekstensifikasi** (mencari wajib pajak baru). Jika target memang terlalu tinggi, ajukan revisi target secara proporsional."""
+            
     elif "Efisiensi" in ratio_name:
-        if val > 100: return "**Kurang Efisien (Overbudget).** Realisasi belanja melebihi anggaran. **Saran:** Evaluasi ulang perencanaan anggaran dan lakukan penghematan pada belanja non-prioritas."
-        elif val >= 90: return "**Sangat Efisien.** Penyerapan anggaran sesuai target. **Saran:** Pastikan output program/kegiatan benar-benar dirasakan manfaatnya oleh masyarakat."
-        else: return "**Penyerapan Rendah.** Anggaran tidak terserap maksimal. **Sebab:** Keterlambatan pengadaan atau program belum berjalan. **Saran:** Percepat proses tender dan eksekusi program agar target pembangunan tidak tertunda."
+        if val > 100:
+            return """**Kondisi:** Kurang Efisien (Overbudget). Realisasi belanja melebihi pagu anggaran.<br>
+            **Sebab:** Adanya pengeluaran tak terduga, kenaikan harga barang/jasa (inflasi), atau lemahnya kontrol pengadaan.<br>
+            **Dampak:** Melanggar aturan keuangan (jika melampaui pagu definitif), memicu defisit, dan berpotensi menimbulkan temuan audit.<br>
+            **Rekomendasi:** Segera lakukan evaluasi ulang perencanaan anggaran. Terapkan penghematan pada belanja non-prioritas. Lakukan revisi DPA (Dokumen Pelaksanaan Anggaran) jika memang diperlukan pergeseran."""
+        elif val >= 90:
+            return """**Kondisi:** Sangat Efisien. Penyerapan anggaran sesuai target.<br>
+            **Sebab:** Perencanaan dan eksekusi program berjalan sesuai jadwal.<br>
+            **Dampak:** Program kerja tercapai tepat waktu.<br>
+            **Rekomendasi:** Pastikan output program/kegiatan benar-benar dirasakan manfaatnya oleh masyarakat (Value for Money). Jangan hanya mengejar penyerapan, tapi juga kualitas hasil."""
+        else:
+            return """**Kondisi:** Penyerapan Rendah. Anggaran tidak terserap maksimal.<br>
+            **Sebab:** Keterlambatan proses pengadaan barang/jasa, program belum berjalan, atau kendala teknis di lapangan.<br>
+            **Dampak:** Target pembangunan tertunda, uang negara menganggur (idle money), dan manfaat tidak segera dirasakan masyarakat.<br>
+            **Rekomendasi:** Percepat proses tender sejak awal tahun. Lakukan monitoring dan evaluasi (Monev) berkala. Berikan sanksi administratif jika keterlambatan disebabkan oleh kelalaian OPD/Pejabat Pembuat Komitmen."""
+            
     elif "Kemandirian" in ratio_name:
-        if val >= 50: return "**Mandiri.** PAD mendominasi pendapatan. **Saran:** Kembangkan BUMD dan investasi daerah untuk memperkuat struktur fiskal."
-        elif val >= 25: return "**Sedang.** Masih bergantung pada transfer pusat. **Saran:** Gali potensi PAD baru dari sektor pariwisata, pajak reklame, atau retribusi daerah."
-        else: return "**Rendah (Tergantung Transfer).** Sangat bergantung pada dana pusat. **Sebab:** Basis pajak/retribusi lokal yang kecil. **Saran:** Lakukan reformasi perpajakan daerah dan ciptakan iklim investasi yang ramah."
-    return ""
+        if val >= 50:
+            return """**Kondisi:** Mandiri. PAD mendominasi struktur pendapatan.<br>
+            **Sebab:** Basis pajak dan retribusi daerah yang kuat, serta iklim investasi yang sehat.<br>
+            **Dampak:** Tidak terlalu bergantung pada transfer pemerintah pusat. Fleksibilitas fiskal tinggi.<br>
+            **Rekomendasi:** Kembangkan BUMD dan investasi daerah untuk memperkuat struktur fiskal. Berikan insentif bagi investor yang masuk untuk menjaga keberlanjutan PAD."""
+        elif val >= 25:
+            return """**Kondisi:** Sedang. Masih cukup bergantung pada dana transfer pusat.<br>
+            **Sebab:** Sektor unggulan daerah belum tergarap maksimal atau kepatuhan pajak masih rendah.<br>
+            **Dampak:** Rentan terhadap perubahan kebijakan fiskal pusat.<br>
+            **Rekomendasi:** Gali potensi PAD baru (pariwisata, pajak reklame, parkir). Lakukan deregulasi perizinan untuk menarik investasi swasta yang bisa meningkatkan pajak daerah."""
+        else:
+            return """**Kondisi:** Rendah (Sangat Tergantung Transfer).<br>
+            **Sebab:** Basis pajak/retribusi lokal yang kecil, atau kapasitas fiskal daerah yang terbatas.<br>
+            **Dampak:** Ketergantungan tinggi pada pusat (Dana Transfer). Jika transfer terlambat, pembangunan daerah ikut terhambat.<br>
+            **Rekomendasi:** Lakukan reformasi perpajakan daerah secara menyeluruh. Ciptakan iklim investasi yang ramah (kemudahan izin) untuk merangsang aktivitas ekonomi lokal, sehingga pajak daerah meningkat secara alami."""
+            
+    # Penjelasan untuk Perusahaan
+    elif "Current Ratio" in ratio_name:
+        if val >= 1.5:
+            return """**Kondisi:** Likuiditas Sehat.<br>
+            **Sebab:** Manajemen modal kerja yang baik, kas dan piutang lancar cukup untuk menutup utang jangka pendek.<br>
+            **Dampak:** Kredibilitas perusahaan di mata vendor dan bank tinggi.<br>
+            **Rekomendasi:** Jangan simpan kas terlalu banyak (idle cash). Gunakan kelebihan kas untuk ekspansi atau investasi jangka pendek yang produktif."""
+        else:
+            return """**Kondisi:** Risiko Likuiditas.<br>
+            **Sebab:** Kas menipis, piutang macet, atau utang jangka pendek membengkak.<br>
+            **Dampak:** Berisiko gagal bayar (default), kehilangan kepercayaan vendor.<br>
+            **Rekomendasi:** Percepat penagihan piutang, negosiasi ulang jangka waktu utang dengan vendor, atau tambah modal kerja dari pemegang saham."""
+    elif "Debt to Equity" in ratio_name:
+        if val > 2.0:
+            return """**Kondisi:** Solvabilitas Berisiko (High Leverage).<br>
+            **Sebab:** Perusahaan terlalu agresif menggunakan utang untuk membiayai aset/ekspansi.<br>
+            **Dampak:** Beban bunga tinggi, laba tergerus, dan risiko kebangkrutan jika arus kas terganggu.<br>
+            **Rekomendasi:** Kurangi ketergantungan pada utang. Fokus pada pelunasan utang berbunga tinggi, atau cari pendanaan ekuitas (right issue)."""
+        else:
+            return """**Kondisi:** Struktur Modal Sehat.<br>
+            **Sebab:** Komposisi utang dan ekuitas seimbang.<br>
+            **Dampak:** Beban bunga terkendali, risiko finansial relatif rendah.<br>
+            **Rekomendasi:** Manfaatkan utang produktif (jika ada) untuk memperluas pasar, karena struktur modal saat ini masih aman untuk menanggung risiko."""
+            
+    return "Analisis detail belum tersedia untuk kondisi ini."
 
 # ============================================================
 # EXPORT FUNCTIONS
@@ -709,18 +784,24 @@ def page_financial_analysis():
                 with r3: metric_card("Kemandirian Daerah", f"{rasio.get('Kemandirian Daerah (%)', 0)} %")
                 with r4: metric_card("Pertumbuhan Pendapatan", f"{rasio.get('Pertumbuhan Pendapatan (%)', 0)} %")
                 
-                # Kotak Penjelasan & Rekomendasi per Rasio
+                # Kotak Penjelasan & Rekomendasi per Rasio (Sangat Detail)
                 st.markdown("---")
-                st.markdown("### 📝 Analisis Kondisi & Rekomendasi")
+                st.markdown("### 📝 Analisis Kondisi & Rekomendasi Mendalam")
                 
-                st.info(f"**1. Efektivitas Pendapatan ({rasio.get('Efektivitas Pendapatan (%)', 0)}%)**\n\n"
-                        f"{get_ratio_insight('Efektivitas', rasio.get('Efektivitas Pendapatan (%)', 0))}")
+                st.markdown(f"""<div class="insight-box">
+                    <h4>1. Efektivitas Pendapatan ({rasio.get('Efektivitas Pendapatan (%)', 0)}%)</h4>
+                    <p>{get_detailed_insight('Efektivitas', rasio.get('Efektivitas Pendapatan (%)', 0))}</p>
+                </div>""", unsafe_allow_html=True)
                 
-                st.info(f"**2. Efisiensi Belanja ({rasio.get('Efisiensi Belanja (%)', 0)}%)**\n\n"
-                        f"{get_ratio_insight('Efisiensi', rasio.get('Efisiensi Belanja (%)', 0))}")
+                st.markdown(f"""<div class="insight-box">
+                    <h4>2. Efisiensi Belanja ({rasio.get('Efisiensi Belanja (%)', 0)}%)</h4>
+                    <p>{get_detailed_insight('Efisiensi', rasio.get('Efisiensi Belanja (%)', 0))}</p>
+                </div>""", unsafe_allow_html=True)
                 
-                st.info(f"**3. Kemandirian Daerah ({rasio.get('Kemandirian Daerah (%)', 0)}%)**\n\n"
-                        f"{get_ratio_insight('Kemandirian', rasio.get('Kemandirian Daerah (%)', 0))}")
+                st.markdown(f"""<div class="insight-box">
+                    <h4>3. Kemandirian Daerah ({rasio.get('Kemandirian Daerah (%)', 0)}%)</h4>
+                    <p>{get_detailed_insight('Kemandirian', rasio.get('Kemandirian Daerah (%)', 0))}</p>
+                </div>""", unsafe_allow_html=True)
             
             else:
                 # Tampilan Perusahaan
@@ -738,12 +819,21 @@ def page_financial_analysis():
                 with r4: metric_card("ROE", f"{rasio.get('ROE (%)', 0)} %")
                 with r5: metric_card("Debt to Equity", f"{rasio.get('Debt to Equity (x)', 0)} x")
 
-                # Kotak Penjelasan Perusahaan
+                # Kotak Penjelasan Perusahaan (Sangat Detail)
                 st.markdown("---")
-                st.info("**Penjelasan & Rekomendasi Umum Perusahaan:**\n"
-                        "*   **Current Ratio:** Kemampuan membayar utang jangka pendek. Jika < 1, perusahaan berisiko gagal bayar. Saran: Tambah modal kerja.\n"
-                        "*   **NPM & ROA/ROE:** Jika rendah, berarti perusahaan kurang efisien dalam menghasilkan laba. Saran: Tekan biaya operasional dan optimalkan penjualan.\n"
-                        "*   **DER:** Jika > 2.0, perusahaan terlalu bergantung pada utang. Saran: Kurangi beban utang atau tambah ekuitas.")
+                st.markdown("### 📝 Analisis Kondisi & Rekomendasi Mendalam")
+                
+                st.markdown(f"""<div class="insight-box">
+                    <h4>1. Likuiditas: Current Ratio ({rasio.get('Current Ratio (x)', 0)}x)</h4>
+                    <p>{get_detailed_insight('Current Ratio', rasio.get('Current Ratio (x)', 0))}</p>
+                </div>""", unsafe_allow_html=True)
+                
+                st.markdown(f"""<div class="insight-box">
+                    <h4>2. Solvabilitas: Debt to Equity ({rasio.get('Debt to Equity (x)', 0)}x)</h4>
+                    <p>{get_detailed_insight('Debt to Equity', rasio.get('Debt to Equity (x)', 0))}</p>
+                </div>""", unsafe_allow_html=True)
+                
+                st.info("**Catatan:** Untuk analisis Profitabilitas (NPM, ROA, ROE), pastikan angka Laba Bersih sudah sesuai. Jika margin rendah, disarankan untuk menekan biaya operasional (OPEX) dan meningkatkan efisiensi produksi.")
 
         with tab_grafik:
             st.markdown("### Analisis Visual Prospek")
