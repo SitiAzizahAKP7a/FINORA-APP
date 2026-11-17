@@ -17,7 +17,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # ============================================================
-# CONFIG & STYLE
+# CONFIG & STYLE GLOBAL
 # ============================================================
 st.set_page_config(page_title="FINORA AI - Pro Audit", page_icon="💗", layout="wide")
 
@@ -115,11 +115,6 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 def ask_gemini_stream(prompt, audit_context):
-    """
-    Streaming jawaban Gemini.
-    - Prioritas: Interactions API (model terbaru gemini-3.8-flash).
-    - Fallback: models.generate_content_stream bila client.interactions tidak tersedia.
-    """
     try:
         client = get_gemini_client()
         if client is None:
@@ -139,7 +134,6 @@ def ask_gemini_stream(prompt, audit_context):
         {prompt}
         """
 
-        # --- Jalur utama: Interactions API ---
         if hasattr(client, "interactions"):
             try:
                 stream = client.interactions.create(
@@ -148,23 +142,19 @@ def ask_gemini_stream(prompt, audit_context):
                     stream=True,
                 )
                 for event in stream:
-                    # Format event baru: event.delta.text
                     delta = getattr(event, "delta", None)
                     if delta is not None:
                         text = getattr(delta, "text", None)
                         if text:
                             yield text
-                    # Sebagian event mungkin punya .text langsung
                     else:
                         direct_text = getattr(event, "text", None)
                         if direct_text:
                             yield direct_text
-                return  # selesai tanpa fallback
+                return
             except Exception as e_inter:
-                # Kalau gagal di interactions, coba fallback models API di bawah
                 yield f"\n\n⚠️ Interactions API gagal ({type(e_inter).__name__}). Mencoba fallback...\n\n"
 
-        # --- Fallback: models.generate_content_stream ---
         response_stream = client.models.generate_content_stream(
             model=model_id,
             contents=full_prompt,
@@ -586,7 +576,93 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
                 st.rerun()
 
 # ============================================================
-# PAGES
+# LANDING PAGE (HALAMAN DEPAN)
+# ============================================================
+def page_landing():
+    # Sembunyikan sidebar & menu navigasi saat di halaman depan
+    st.markdown("""
+        <style>
+            [data-testid="collapsedControl"] { display: none; }
+            [data-testid="stSidebar"] { display: none; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Hero Section
+    st.markdown("""
+    <div style="text-align: center; padding: 50px 20px; background: linear-gradient(135deg, #FFF0F4 0%, #FFF5E8 100%); border-radius: 20px; margin-bottom: 40px; border: 2px solid #FF5C8B; box-shadow: 0 10px 30px rgba(255, 92, 139, 0.15);">
+        <div style="font-size: 5rem; margin-bottom: 10px;">💗</div>
+        <h1 style="color: #7A1F3D; font-size: 3.5rem; margin-bottom: 15px; font-weight: 800;">FINORA AI</h1>
+        <p style="color: #2D1B24; font-size: 1.3rem; max-width: 800px; margin: 0 auto; line-height: 1.6;">
+            Platform Kecerdasan Finansial untuk mendeteksi anomali dan menyusun <b>Kertas Kerja Audit (KKA)</b> secara otomatis dalam hitungan detik.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Fitur Section
+    st.markdown("<h2 style='text-align: center; color: #7A1F3D; margin-bottom: 30px; font-weight: 700;'>Bagaimana FINORA Bekerja?</h2>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("""
+        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; height: 100%; border-top: 5px solid #FF5C8B; transition: transform 0.3s;">
+            <div style="font-size: 3rem; margin-bottom: 15px;">📤</div>
+            <h3 style="color: #7A1F3D; margin-bottom: 10px;">1. Upload Data</h3>
+            <p style="color: #555; font-size: 0.95rem;">Cukup unggah file Excel atau CSV laporan keuangan Anda. Sistem kami akan langsung membaca dan mendeteksi kolom secara otomatis.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("""
+        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; height: 100%; border-top: 5px solid #FF5C8B; transition: transform 0.3s;">
+            <div style="font-size: 3rem; margin-bottom: 15px;">🧠</div>
+            <h3 style="color: #7A1F3D; margin-bottom: 10px;">2. AI Auto-Detect</h3>
+            <p style="color: #555; font-size: 0.95rem;">Kecerdasan buatan kami menguji data dan mendeteksi anomali seperti data kosong, duplikat, overbudget, outlier, dan kata kunci mencurigakan.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown("""
+        <div style="background: white; padding: 30px 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; height: 100%; border-top: 5px solid #FF5C8B; transition: transform 0.3s;">
+            <div style="font-size: 3rem; margin-bottom: 15px;">📑</div>
+            <h3 style="color: #7A1F3D; margin-bottom: 10px;">3. Laporan KKA Instan</h3>
+            <p style="color: #555; font-size: 0.95rem;">Hasilkan Kertas Kerja Audit profesional lengkap dengan bukti dan rekomendasi. Siap diunduh dalam format PDF atau Excel.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+
+    # Call to Action (Tombol Mulai)
+    col_cta1, col_cta2, col_cta3 = st.columns([1, 2, 1])
+    with col_cta2:
+        st.markdown("""
+        <style>
+        .stButton > button {
+            background: linear-gradient(135deg, #FF5C8B 0%, #7A1F3D 100%) !important;
+            color: white !important;
+            font-size: 1.3rem !important;
+            padding: 20px 30px !important;
+            border-radius: 12px !important;
+            border: none !important;
+            font-weight: 800 !important;
+            box-shadow: 0 6px 20px rgba(255, 92, 139, 0.4) !important;
+            transition: all 0.3s ease !important;
+            width: 100%;
+        }
+        .stButton > button:hover {
+            transform: translateY(-3px) !important;
+            box-shadow: 0 8px 25px rgba(255, 92, 139, 0.6) !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        if st.button("🚀 START YOUR ANALYSIS", use_container_width=True):
+            st.session_state.app_started = True
+            st.rerun()
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888; font-size: 0.9rem;'>Ditenagai oleh Google Gemini 3.8 Flash | FINORA Financial Intelligence</p>", unsafe_allow_html=True)
+
+
+# ============================================================
+# PAGES (DASHBOARD, AUDIT, SIMPAN)
 # ============================================================
 def page_audit():
     finora_header("Audit Profesional", "Sistem deteksi otomatis (Laporan Pemerintah, Perusahaan, Pembelian, Penjualan)")
@@ -753,24 +829,40 @@ def page_simpan():
             render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score)
 
 # ============================================================
-# MAIN
+# MAIN (LOGIC ROUTING)
 # ============================================================
 def main():
-    st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
-    st.sidebar.markdown('<p style="text-align:center;font-size:12px;color:#7A1F3D;">Financial Intelligence<br>Platform</p>', unsafe_allow_html=True)
-    st.sidebar.markdown("---")
+    # Inisialisasi state untuk halaman depan
+    if "app_started" not in st.session_state:
+        st.session_state.app_started = False
 
-    nav = st.sidebar.radio("Navigasi", ["Dashboard", "Audit Profesional", "Simpan"])
+    # Jika belum mulai, tampilkan Landing Page
+    if not st.session_state.app_started:
+        page_landing()
+    
+    # Jika sudah klik "Start", tampilkan Sidebar dan Aplikasi Utama
+    else:
+        st.sidebar.markdown('<h1 style="color:#FF5C8B;text-align:center;">💗 FINORA</h1>', unsafe_allow_html=True)
+        st.sidebar.markdown('<p style="text-align:center;font-size:12px;color:#7A1F3D;">Financial Intelligence<br>Platform</p>', unsafe_allow_html=True)
+        st.sidebar.markdown("---")
 
-    st.sidebar.markdown("---")
-    st.sidebar.caption("⚠️ Temuan bersifat indikasi dan perlu verifikasi dokumen fisik.")
+        nav = st.sidebar.radio("Navigasi", ["Dashboard", "Audit Profesional", "Simpan"])
 
-    if nav == "Dashboard":
-        page_dashboard()
-    elif nav == "Audit Profesional":
-        page_audit()
-    elif nav == "Simpan":
-        page_simpan()
+        st.sidebar.markdown("---")
+        
+        # Tombol untuk kembali ke Landing Page
+        if st.sidebar.button("🏠 Kembali ke Halaman Depan", use_container_width=True):
+            st.session_state.app_started = False
+            st.rerun()
+
+        st.sidebar.caption("⚠️ Temuan bersifat indikasi dan perlu verifikasi dokumen fisik.")
+
+        if nav == "Dashboard":
+            page_dashboard()
+        elif nav == "Audit Profesional":
+            page_audit()
+        elif nav == "Simpan":
+            page_simpan()
 
 if __name__ == "__main__":
     main()
