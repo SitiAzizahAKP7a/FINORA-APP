@@ -226,34 +226,111 @@ def generate_excel(flagged_data_dict, findings_list):
     buffer.seek(0)
     return buffer
 
-def generate_pdf(findings_list):
+from reportlab.platypus import Table, TableStyle
+
+def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     elements = []
+    
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(name='Title', parent=styles['Heading1'], textColor=colors.HexColor('#7A1F3D'), alignment=1)
     heading_style = ParagraphStyle(name='Heading', parent=styles['Heading2'], textColor=colors.HexColor('#FF5C8B'))
     normal_style = styles['Normal']
     
-    elements.append(Paragraph("Laporan Hasil Audit FINORA", title_style))
-    elements.append(Paragraph(f"Tanggal Cetak: {datetime.now().strftime('%d %B %Y %H:%M')}", normal_style))
-    elements.append(Spacer(1, 15))
+    # 1. KOP KKA
+    elements.append(Paragraph("KERTAS KERJA AUDIT (KKA)", title_style))
+    elements.append(Paragraph("FINORA Financial Intelligence System", normal_style))
+    elements.append(Spacer(1, 10))
     
-    if not findings_list:
-        elements.append(Paragraph("✅ Tidak ada temuan pelanggaran (High-Level).", normal_style))
-    else:
-        elements.append(Paragraph(f"Ditemukan {len(findings_list)} indikasi masalah:", heading_style))
-        elements.append(Spacer(1, 10))
-        for i, f in enumerate(findings_list):
-            elements.append(Paragraph(f"<b>{i+1}. [{f['risk_level']}] {f['title']}</b>", normal_style))
-            elements.append(Paragraph(f"<i>Modul: {f['module']}</i>", normal_style))
-            elements.append(Paragraph(f"Analisis: {f['detail']}", normal_style))
-            elements.append(Paragraph(f"Rekomendasi: {f['recommendation']}", normal_style))
-            elements.append(Spacer(1, 10))
+    header_data = [
+        ["Nama Entitas", f": {entitas if entitas else '-'}"],
+        ["Periode Audit", f": {periode if periode else '-'}"],
+        ["Nama File", f": {filename}"],
+        ["Tanggal Pemeriksaan", f": {datetime.now().strftime('%d %B %Y')}"],
+        ["Skor Risiko", f": {score}/100"]
+    ]
+    t_header = Table(header_data, colWidths=[120, 350])
+    t_header.setStyle(TableStyle([
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    elements.append(t_header)
+    elements.append(Spacer(1, 20))
+    
+    # 2. RINGKASAN TEMUAN
+    elements.append(Paragraph("A. Ringkasan Temuan (Summary of Findings)", heading_style))
+    elements.append(Spacer(1, 10))
+    
+    summary_data = [["No", "Kode", "Kategori Uji", "Risiko", "Deskripsi Singkat"]]
+    for idx, f in enumerate(findings_list, 1):
+        summary_data.append([str(idx), f"F-{idx:02d}", f['module'], f['risk_level'], f['title']])
+    
+    t_summary = Table(summary_data, colWidths=[30, 50, 100, 60, 230])
+    t_summary.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#FF5C8B')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('GRID', (0,0), (-1,-1), 1, colors.grey),
+    ]))
+    elements.append(t_summary)
+    elements.append(Spacer(1, 20))
+    
+    # 3. RINCIAN TEMUAN
+    elements.append(Paragraph("B. Rincian Temuan, Bukti, dan Rekomendasi", heading_style))
+    elements.append(Spacer(1, 10))
+    
+    for idx, f in enumerate(findings_list, 1):
+        elements.append(Paragraph(f"<b>F-{idx:02d}: {f['title']}</b>", normal_style))
+        elements.append(Paragraph(f"<b>1. Kondisi:</b> {f['detail']}", normal_style))
+        elements.append(Paragraph(f"<b>2. Rekomendasi:</b> {f['recommendation']}", normal_style))
+        
+        # Tampilkan Bukti Data Mentah ke PDF
+        modul_name = f['module']
+        df_flag = pd.DataFrame()
+        if modul_name in flagged_data and not flagged_data[modul_name].empty:
+            df_flag = flagged_data[modul_name]
+        elif "Kelengkapan" in modul_name and "Kelengkapan Kosong" in flagged_data:
+            df_flag = flagged_data["Kelengkapan Kosong"]
+        elif "Duplikat" in modul_name and "Duplikasi Ekstrem" in flagged_data:
+            df_flag = flagged_data["Duplikasi Ekstrem"]
+        elif "Negatif" in modul_name and "Nilai Negatif" in flagged_data:
+            df_flag = flagged_data["Nilai Negatif"]
+        elif "Overbudget" in modul_name and "Overbudget" in flagged_data:
+            df_flag = flagged_data["Overbudget"]
+
+        if not df_flag.empty:
+            elements.append(Spacer(1, 5))
+            elements.append(Paragraph("<i>Bukti Audit (Data Terindikasi):</i>", normal_style))
+            
+            # Ambil max 5 baris untuk PDF agar tidak kepanjangan
+            preview_df = df_flag.head(5)
+            raw_data = [preview_df.columns.tolist()] + preview_df.values.tolist()
+            
+            # Bersihkan data dari tipe data pandas yang aneh
+            raw_data = [[str(cell) for cell in row] for row in raw_data]
+            
+            t_raw = Table(raw_data)
+            t_raw.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTSIZE', (0,0), (-1,-1), 8),
+            ]))
+            elements.append(t_raw)
+        
+        elements.append(Spacer(1, 20))
+
+    # 4. KESIMPULAN
+    elements.append(Paragraph("C. Kesimpulan Auditor", heading_style))
+    elements.append(Paragraph(f"Ditemukan {len(findings_list)} indikasi masalah. Data memerlukan perbaikan dan verifikasi dokumen lebih lanjut.", normal_style))
+
     doc.build(elements)
     buffer.seek(0)
     return buffer
-
 # ============================================================
 # UI COMPONENTS & KKA RENDER
 # ============================================================
