@@ -9,10 +9,7 @@ import hashlib
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
-
-# Menggunakan SDK Gemini Terbaru
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -104,21 +101,23 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (STREAMING UNTUK RESPON CEPAT)
+# AI ENGINE (STREAMING CEPAT & STABIL)
 # ============================================================
 def ask_gemini_stream(prompt, audit_context):
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
         if not api_key:
-            yield "⚠️ API Key Gemini belum diatur."
+            yield "⚠️ API Key Gemini belum diatur di Secrets."
             return
         
-        client = genai.Client(api_key=api_key)
+        genai.configure(api_key=api_key)
         
-        # Konteks dipersingkat agar AI tidak lambat membacanya
+        # Model paling stabil dan cepat
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
         full_prompt = f"""
         Kamu adalah FINORA AI, Asisten Auditor Profesional.
-        Jawab pertanyaan auditor berdasarkan KKA ini secara ringkas, profesional, dan to-the-point.
+        Jawab pertanyaan berdasarkan Kertas Kerja Audit (KKA) ini secara ringkas, padat, dan profesional.
         
         [KONTEKS KKA]
         {audit_context}
@@ -127,35 +126,14 @@ def ask_gemini_stream(prompt, audit_context):
         {prompt}
         """
         
-        # Streaming dengan Model 3.8-flash
-        try:
-            response = client.models.generate_content_stream(
-                model='gemini-3.8-flash',
-                contents=full_prompt,
-                config=types.GenerateContentConfig(temperature=0.5, max_output_tokens=1024)
-            )
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
-            return
-        except Exception:
-            pass # Lanjut ke model fallback jika gagal
-            
-        # Fallback ke gemini-flash-latest
-        try:
-            response = client.models.generate_content_stream(
-                model='gemini-flash-latest',
-                contents=full_prompt,
-                config=types.GenerateContentConfig(temperature=0.5, max_output_tokens=1024)
-            )
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
-        except Exception as e:
-            yield f"\n\n⚠️ Layanan AI sedang sibuk. Silakan coba lagi. (Error: {str(e)})"
-            
+        # Stream jawaban langsung
+        response = model.generate_content(full_prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+                
     except Exception as e:
-        yield f"⚠️ Kesalahan sistem: {str(e)}"
+        yield f"\n\n⚠️ Terjadi kesalahan: {str(e)}"
 
 # ============================================================
 # SMART AUTO-DETECT COLUMNS
@@ -481,7 +459,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # CHAT AI DENGAN STREAMING (MUNCUL KATA PER KATA)
     with tab_ai:
         st.markdown("### 🤖 Tanya FINORA AI")
         st.info("Tanyakan analisis mendalam seputar temuan audit ini. AI akan menjawab berdasarkan data KKA di atas.")
