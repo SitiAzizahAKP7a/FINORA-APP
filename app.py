@@ -358,12 +358,7 @@ def generate_pdf(entitas, periode, filename, score, findings_list, flagged_data)
 def finora_header(title, subtitle):
     st.markdown(f'<div class="finora-header"><h1>💗 {title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
 
-def render_audit_results(all_findings, flagged_data, filename, entitas, periode, score, is_save_view=False):
-    if not all_findings:
-        st.success("✅ Luar biasa! Tidak ada temuan pelanggaran pada data ini. KKA Bersih.")
-        return None
-
-    summary_to_save = None
+def render_audit_results(all_findings, flagged_data, filename, entitas, periode, score):
     color = "#C62828" if score > 50 else "#EF6C00" if score > 20 else "#2E7D32"
 
     st.markdown(f"""
@@ -441,16 +436,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
         
         pdf_buffer = generate_pdf(entitas, periode, filename, score, all_findings, flagged_data)
         col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"KKA_{entitas}_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
-        
-        if not is_save_view:
-            flagged_json = {k: v.to_dict(orient="records") for k, v in flagged_data.items() if not v.empty}
-            summary_to_save = {
-                "total_findings": len(all_findings), 
-                "score": score, 
-                "entitas": entitas,
-                "periode": periode,
-                "flagged_data": flagged_json
-            }
 
     with tab_grafik:
         c1, c2 = st.columns(2)
@@ -468,7 +453,7 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # LOGIKA CHAT AI (DIPERBAIKI)
+    # CHAT AI DENGAN FORM (ANTI RESET)
     with tab_ai:
         st.markdown("### 🤖 Tanya FINORA AI")
         st.info("Tanyakan analisis mendalam seputar temuan audit ini. AI akan menjawab berdasarkan data KKA di atas.")
@@ -477,31 +462,24 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
         for idx, f in enumerate(all_findings, 1):
             context_text += f"{idx}. [{f['risk_level']}] {f['module']}: {f['title']}. {f['detail']}\n"
         
-        # Menggunakan session state untuk menyimpan chat per file
-        session_key = f"ai_messages_{filename}"
-        if session_key not in st.session_state:
-            st.session_state[session_key] = []
+        if "ai_chat_history" not in st.session_state:
+            st.session_state.ai_chat_history = []
             
-        c1, c2 = st.columns([4, 1])
-        with c1:
-            prompt = st.text_input("Tulis pertanyaan Anda di sini...", key=f"ai_prompt_{filename}")
-        with c2:
-            st.write("") 
-            st.write("")
-            kirim = st.button("Kirim ke AI", use_container_width=True, key=f"btn_ai_{filename}")
-            
-        if kirim and prompt:
-            st.session_state[session_key].append({"role": "user", "content": prompt})
-            with st.spinner("FINORA AI sedang menganalisis..."):
-                response = ask_gemini(prompt, context_text)
-            st.session_state[session_key].append({"role": "assistant", "content": response})
-            st.rerun()
-
-        for msg in st.session_state[session_key]:
+        for msg in st.session_state.ai_chat_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-    return summary_to_save
+        # MENGGUNAKAN FORM AGAR TIDAK REFRESH SAAT DIKETIK
+        with st.form(key="ai_chat_form", clear_on_submit=True):
+            prompt = st.text_input("Tulis pertanyaan Anda di sini...")
+            submit_button = st.form_submit_button(label="Kirim ke AI", use_container_width=True)
+            
+            if submit_button and prompt:
+                st.session_state.ai_chat_history.append({"role": "user", "content": prompt})
+                with st.spinner("FINORA AI sedang menganalisis..."):
+                    response = ask_gemini(prompt, context_text)
+                st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
+                st.rerun()
 
 # ============================================================
 # PAGES
@@ -581,14 +559,38 @@ def page_audit():
                 med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
                 score = min(100, (high_count * 20) + (med_count * 10))
 
-                st.markdown("---")
-                summary_to_save = render_audit_results(all_findings, flagged_data, uploaded.name, entitas, periode, score, is_save_view=False)
+                # SIMPAN HASIL KE SESSION STATE AGAR TIDAK HILANG SAAT DIKLIK
+                st.session_state['audit_results'] = {
+                    "findings": all_findings,
+                    "flagged": flagged_data,
+                    "filename": uploaded.name,
+                    "entitas": entitas,
+                    "periode": periode,
+                    "score": score
+                }
                 
-                if summary_to_save:
-                    fid = save_file(uploaded.name, uploaded.getvalue())
-                    aid = save_analysis(fid, "Audit Profesional", ["audit_v5"], summary_to_save)
-                    save_findings(aid, all_findings)
-                    st.success(f"💾 KKA untuk **{entitas}** berhasil diarsipkan (ID #{aid}).")
+                # Reset chat lama jika ada audit baru
+                st.session_state.ai_chat_history = []
+
+                # Simpan ke Database
+                flagged_json = {k: v.to_dict(orient="records") for k, v in flagged_data.items() if not v.empty}
+                summary_to_save = {
+                    "total_findings": len(all_findings), "score": score, 
+                    "entitas": entitas, "periode": periode, "flagged_data": flagged_json
+                }
+                fid = save_file(uploaded.name, uploaded.getvalue())
+                aid = save_analysis(fid, "Audit Profesional", ["audit_v5"], summary_to_save)
+                save_findings(aid, all_findings)
+                st.success(f"💾 KKA untuk **{entitas}** berhasil diarsipkan (ID #{aid}).")
+
+    # TAMPILKAN HASIL DARI SESSION STATE (JADI TIDAK HILANG SAAT REFRESH)
+    if 'audit_results' in st.session_state:
+        res = st.session_state['audit_results']
+        st.markdown("---")
+        render_audit_results(
+            res["findings"], res["flagged"], res["filename"], 
+            res["entitas"], res["periode"], res["score"]
+        )
 
 def page_dashboard():
     finora_header("Dashboard", "Ringkasan seluruh aktivitas FINORA AI")
@@ -636,7 +638,8 @@ def page_simpan():
             findings_df = fetch_findings(aid)
             findings_list = findings_df.to_dict("records")
             
-            render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score, is_save_view=True)
+            # Tampilkan KKA
+            render_audit_results(findings_list, flagged_data, an["filename"], entitas, periode, score)
 
 # ============================================================
 # MAIN
