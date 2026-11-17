@@ -106,7 +106,7 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (google-genai, streaming, stabil)
+# AI ENGINE (gemini-3.8-flash via Interactions API + fallback)
 # ============================================================
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
@@ -115,14 +115,18 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 def ask_gemini_stream(prompt, audit_context):
+    """
+    Streaming jawaban Gemini.
+    - Prioritas: Interactions API (model terbaru gemini-3.8-flash).
+    - Fallback: models.generate_content_stream bila client.interactions tidak tersedia.
+    """
     try:
         client = get_gemini_client()
         if client is None:
             yield "⚠️ API Key Gemini belum diatur di Secrets."
             return
 
-        # Model aktif (jika error, coba: gemini-2.5-flash / gemini-flash-latest)
-        model_id = "gemini-2.0-flash-001"
+        model_id = "gemini-3.8-flash"
 
         full_prompt = f"""
         Kamu adalah FINORA AI, Asisten Auditor Profesional.
@@ -135,6 +139,32 @@ def ask_gemini_stream(prompt, audit_context):
         {prompt}
         """
 
+        # --- Jalur utama: Interactions API ---
+        if hasattr(client, "interactions"):
+            try:
+                stream = client.interactions.create(
+                    model=model_id,
+                    input=full_prompt,
+                    stream=True,
+                )
+                for event in stream:
+                    # Format event baru: event.delta.text
+                    delta = getattr(event, "delta", None)
+                    if delta is not None:
+                        text = getattr(delta, "text", None)
+                        if text:
+                            yield text
+                    # Sebagian event mungkin punya .text langsung
+                    else:
+                        direct_text = getattr(event, "text", None)
+                        if direct_text:
+                            yield direct_text
+                return  # selesai tanpa fallback
+            except Exception as e_inter:
+                # Kalau gagal di interactions, coba fallback models API di bawah
+                yield f"\n\n⚠️ Interactions API gagal ({type(e_inter).__name__}). Mencoba fallback...\n\n"
+
+        # --- Fallback: models.generate_content_stream ---
         response_stream = client.models.generate_content_stream(
             model=model_id,
             contents=full_prompt,
