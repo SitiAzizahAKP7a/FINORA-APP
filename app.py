@@ -94,12 +94,9 @@ def fetch_findings(aid):
 # SMART AUTO-DETECT COLUMNS
 # ============================================================
 def auto_detect_columns(df):
-    """Mendeteksi otomatis nama kolom berdasarkan kata kunci umum di Indonesia"""
     mapping = {"date": None, "amount": None, "desc": None, "debit": None, "credit": None, "budget": None, "invoice": None}
-    
     for col in df.columns:
         col_lower = str(col).lower()
-        
         if not mapping["date"] and any(k in col_lower for k in ["tanggal", "tgl", "date", "waktu", "periode"]):
             mapping["date"] = col
         if not mapping["amount"] and any(k in col_lower for k in ["actual", "realisasi", "nominal", "jumlah", "total", "nilai", "amount", "harga"]):
@@ -114,7 +111,6 @@ def auto_detect_columns(df):
             mapping["credit"] = col
         if not mapping["invoice"] and any(k in col_lower for k in ["invoice", "faktur", "nota", "ref", "no."]):
             mapping["invoice"] = col
-            
     return mapping
 
 # ============================================================
@@ -145,17 +141,23 @@ def audit_negative(df, amount_col):
         s = pd.to_numeric(df[amount_col], errors="coerce")
         flagged = df[s < 0]
         if not flagged.empty:
-            findings.append({"module": "Nominal Negatif", "risk_level": "Sedang", "title": f"{len(flagged)} transaksi bernilai negatif", "detail": "Nilai negatif menandakan anomali input atau retur/void.", "recommendation": "Periksa bukti memo koreksi."})
+            # DIUBAH MENJADI OBSERVASI RENDAH
+            findings.append({
+                "module": "Observasi Nilai Negatif", 
+                "risk_level": "Rendah", 
+                "title": f"{len(flagged)} transaksi bernilai negatif", 
+                "detail": "Ditemukan nilai minus pada kolom nominal. Nilai negatif tidak selalu salah (bisa jadi retur, diskon, atau kredit pendapatan), namun perlu dipastikan kewajarannya.", 
+                "recommendation": "Lakukan uji petik untuk memastikan transaksi negatif ini memiliki memo retur atau bukti koreksi yang sah."
+            })
     return findings, flagged
 
 def audit_overbudget(df, budget_col, amount_col):
-    """Khusus Laporan Pemerintah (Pagu vs Realisasi)"""
     findings, flagged = [], pd.DataFrame()
     if budget_col and amount_col:
         try:
             b = pd.to_numeric(df[budget_col], errors="coerce").fillna(0)
             a = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
-            flagged = df[a > b] # Realisasi > Pagu
+            flagged = df[a > b]
             if not flagged.empty:
                 findings.append({"module": "Overbudget (Melebihi Pagu)", "risk_level": "Tinggi", "title": f"{len(flagged)} akun melebihi pagu anggaran", "detail": "Nilai realisasi lebih besar daripada anggaran yang ditetapkan.", "recommendation": "Minta penjelasan terkait pergeseran atau kelebihan anggaran."})
         except: pass
@@ -209,7 +211,6 @@ def generate_excel(flagged_data_dict, findings_list):
         if not df_findings.empty:
             df_findings.columns = ["Modul", "Tingkat Risiko", "Judul", "Detail", "Rekomendasi"]
             df_findings.to_excel(writer, sheet_name="Ringkasan Temuan", index=False)
-        
         for modul, df_flag in flagged_data_dict.items():
             if not df_flag.empty:
                 sheet_name = modul[:31]
@@ -221,7 +222,6 @@ def generate_pdf(findings_list):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     elements = []
-    
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(name='Title', parent=styles['Heading1'], textColor=colors.HexColor('#7A1F3D'), alignment=1)
     heading_style = ParagraphStyle(name='Heading', parent=styles['Heading2'], textColor=colors.HexColor('#FF5C8B'))
@@ -236,14 +236,12 @@ def generate_pdf(findings_list):
     else:
         elements.append(Paragraph(f"Ditemukan {len(findings_list)} indikasi masalah:", heading_style))
         elements.append(Spacer(1, 10))
-        
         for i, f in enumerate(findings_list):
             elements.append(Paragraph(f"<b>{i+1}. [{f['risk_level']}] {f['title']}</b>", normal_style))
             elements.append(Paragraph(f"<i>Modul: {f['module']}</i>", normal_style))
             elements.append(Paragraph(f"Analisis: {f['detail']}", normal_style))
             elements.append(Paragraph(f"Rekomendasi: {f['recommendation']}", normal_style))
             elements.append(Spacer(1, 10))
-
     doc.build(elements)
     buffer.seek(0)
     return buffer
@@ -259,6 +257,8 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
         st.success("✅ Luar biasa! Tidak ada temuan anomali pada data ini.")
         return
 
+    # Skor Risiko HANYA dihitung dari yang berisiko Tinggi & Sedang. 
+    # Yang "Rendah" (seperti nilai negatif) tidak menambah skor bahaya.
     high_count = sum(1 for f in all_findings if f["risk_level"] == "Tinggi")
     med_count = sum(1 for f in all_findings if f["risk_level"] == "Sedang")
     score = min(100, (high_count * 20) + (med_count * 10))
@@ -276,10 +276,8 @@ def render_audit_results(all_findings, flagged_data, uploaded_file):
                 
         st.markdown("### 📥 Download Laporan Audit")
         col1, col2 = st.columns(2)
-        
         excel_buffer = generate_excel(flagged_data, all_findings)
         col1.download_button("⬇️ Download Excel (Multi-Sheet)", data=excel_buffer, file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        
         pdf_buffer = generate_pdf(all_findings)
         col2.download_button("⬇️ Download PDF Report", data=pdf_buffer, file_name=f"FINORA_Audit_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", use_container_width=True)
         
@@ -326,7 +324,6 @@ def page_audit():
     if uploaded:
         df = pd.read_excel(uploaded, header=header_row) if uploaded.name.endswith('xlsx') else pd.read_csv(uploaded, header=header_row)
         
-        # AI Auto-Detect
         detected = auto_detect_columns(df)
         
         st.markdown("### 2. Pemetaan Kolom (AI Auto-Detect)")
@@ -354,35 +351,29 @@ def page_audit():
                 all_findings = []
                 flagged_data = {}
                 
-                # Cek Kelengkapan Kosong
                 cols_to_check = [c for c in [date_col, amount_col or debit_col, desc_col] if c]
                 f, flag = audit_empty(df, cols_to_check)
                 all_findings.extend(f); flagged_data["Kelengkapan Kosong"] = flag
 
-                # Cek Duplikat
                 subset_dup = [c for c in [date_col, amount_col or debit_col, desc_col, invoice_col] if c]
                 f, flag = audit_duplicates(df, subset_dup)
                 all_findings.extend(f); flagged_data["Duplikasi Ekstrem"] = flag
 
-                # Cek Weekend
                 if date_col:
                     f, flag = audit_weekend(df, date_col)
                     all_findings.extend(f); flagged_data["Transaksi Weekend"] = flag
                     
-                # Cek Kata Kunci
                 if desc_col:
                     f, flag = audit_suspicious_words(df, desc_col)
                     all_findings.extend(f); flagged_data["Kata Kunci"] = flag
 
-                # Cek Nominal Spesifik
                 if amount_col:
                     f, flag = audit_negative(df, amount_col)
-                    all_findings.extend(f); flagged_data["Nominal Negatif"] = flag
+                    all_findings.extend(f); flagged_data["Nilai Negatif"] = flag
                     
                     f, flag = audit_outliers_iqr(df, amount_col)
                     all_findings.extend(f); flagged_data["Outlier IQR"] = flag
                 
-                # Cek Overbudget (Pemerintah)
                 if budget_col and amount_col:
                     f, flag = audit_overbudget(df, budget_col, amount_col)
                     all_findings.extend(f); flagged_data["Overbudget"] = flag
