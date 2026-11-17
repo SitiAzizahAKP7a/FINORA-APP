@@ -110,7 +110,7 @@ def ask_gemini(prompt, audit_context):
             return "⚠️ API Key Gemini belum diatur. Silakan tambahkan `GEMINI_API_KEY` di menu Secrets Streamlit."
         
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash") # Menggunakan model tercepat
+        model = genai.GenerativeModel("gemini-1.5-flash")
         
         full_prompt = f"""
         Kamu adalah FINORA AI, seorang Asisten Auditor Profesional.
@@ -361,8 +361,9 @@ def finora_header(title, subtitle):
 def render_audit_results(all_findings, flagged_data, filename, entitas, periode, score, is_save_view=False):
     if not all_findings:
         st.success("✅ Luar biasa! Tidak ada temuan pelanggaran pada data ini. KKA Bersih.")
-        return
+        return None
 
+    summary_to_save = None
     color = "#C62828" if score > 50 else "#EF6C00" if score > 20 else "#2E7D32"
 
     st.markdown(f"""
@@ -380,7 +381,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
     </div>
     """, unsafe_allow_html=True)
     
-    # TAMBAHAN TAB AI
     tab_kka, tab_grafik, tab_ai = st.tabs(["📝 Laporan Temuan & Bukti", "📊 Visualisasi Grafik", "🤖 Tanya FINORA AI"])
     
     with tab_kka:
@@ -451,7 +451,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
                 "periode": periode,
                 "flagged_data": flagged_json
             }
-            return summary_to_save
 
     with tab_grafik:
         c1, c2 = st.columns(2)
@@ -469,42 +468,40 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             fig_bar = px.bar(mod_df, x="Jumlah", y="Modul", orientation='h', color_discrete_sequence=["#FF5C8B"])
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # LOGIKA CHAT AI
+    # LOGIKA CHAT AI (DIPERBAIKI)
     with tab_ai:
         st.markdown("### 🤖 Tanya FINORA AI")
         st.info("Tanyakan analisis mendalam seputar temuan audit ini. AI akan menjawab berdasarkan data KKA di atas.")
         
-        # Siapkan konteks untuk AI
         context_text = f"Nama Entitas: {entitas}\nPeriode: {periode}\nSkor Risiko: {score}/100\n\nDaftar Temuan:\n"
         for idx, f in enumerate(all_findings, 1):
             context_text += f"{idx}. [{f['risk_level']}] {f['module']}: {f['title']}. {f['detail']}\n"
         
-        # Session state untuk chat
-        if "ai_messages" not in st.session_state:
-            st.session_state.ai_messages = []
+        # Menggunakan session state untuk menyimpan chat per file
+        session_key = f"ai_messages_{filename}"
+        if session_key not in st.session_state:
+            st.session_state[session_key] = []
             
-        # Kotak Input Manual (Dijamin Muncul)
         c1, c2 = st.columns([4, 1])
         with c1:
             prompt = st.text_input("Tulis pertanyaan Anda di sini...", key=f"ai_prompt_{filename}")
         with c2:
-            st.write("") # Spasi biar tombol sejajar
+            st.write("") 
             st.write("")
-            kirim = st.button("Kirim ke AI", use_container_width=True)
+            kirim = st.button("Kirim ke AI", use_container_width=True, key=f"btn_ai_{filename}")
             
         if kirim and prompt:
-            # Simpan pertanyaan user
-            st.session_state.ai_messages.append({"role": "user", "content": prompt})
-            # Minta jawaban ke AI
+            st.session_state[session_key].append({"role": "user", "content": prompt})
             with st.spinner("FINORA AI sedang menganalisis..."):
                 response = ask_gemini(prompt, context_text)
-            st.session_state.ai_messages.append({"role": "assistant", "content": response})
-            st.rerun() # Refresh halaman agar chat langsung muncul
+            st.session_state[session_key].append({"role": "assistant", "content": response})
+            st.rerun()
 
-        # Tampilkan Riwayat Chat
-        for msg in st.session_state.ai_messages:
+        for msg in st.session_state[session_key]:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
+
+    return summary_to_save
 
 # ============================================================
 # PAGES
