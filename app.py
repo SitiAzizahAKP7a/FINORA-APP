@@ -105,7 +105,7 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (DENGAN RETRY & FALLBACK)
+# AI ENGINE (GEMINI TERBARU DENGAN RETRY & FALLBACK)
 # ============================================================
 def ask_gemini(prompt, audit_context):
     try:
@@ -128,34 +128,41 @@ def ask_gemini(prompt, audit_context):
         {prompt}
         """
         
-        # Sistem Retry: Mencoba 3 kali jika server Google sibuk (503)
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # Menggunakan model yang tersedia
-                response = client.models.generate_content(
-                    model='gemini-2.0-flash', # Menggunakan 2.0-flash yang lebih stabil dari 3.8
-                    contents=full_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.7,
-                        max_output_tokens=2048,
+        # Daftar model yang akan dicoba secara berurutan
+        models_to_try = [
+            'gemini-3.8-flash',
+            'gemini-flash-latest'
+        ]
+        
+        last_error = None
+        
+        for model_name in models_to_try:
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=full_prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=0.7,
+                            max_output_tokens=2048,
+                        )
                     )
-                )
-                return response.text
-                
-            except Exception as e:
-                error_msg = str(e)
-                # Jika errornya 503 (Server Sibuk), tunggu 3 detik lalu coba lagi
-                if "503" in error_msg or "UNAVAILABLE" in error_msg:
-                    if attempt < max_retries - 1:
-                        time.sleep(3)
-                        continue # Coba lagi
+                    return response.text
+                except Exception as e:
+                    last_error = str(e)
+                    if "503" in last_error or "UNAVAILABLE" in last_error:
+                        if attempt < max_retries - 1:
+                            time.sleep(2)
+                            continue
+                        else:
+                            break # Lanjut ke model berikutnya
+                    elif "404" in last_error or "NOT_FOUND" in last_error:
+                        break # Langsung coba model berikutnya
                     else:
-                        return "⏳ Server Google AI saat ini sedang sangat sibuk (Error 503). Silakan tunggu 1-2 menit lalu klik 'Kirim ke AI' lagi."
-                else:
-                    # Jika error selain 503 (misal API Key salah), langsung hentikan
-                    return f"Terjadi kesalahan saat menghubungi AI: {error_msg}"
-                    
+                        return f"Terjadi kesalahan saat menghubungi AI: {last_error}"
+        
+        return f"⏳ Layanan AI sedang sibuk atau model tidak tersedia. Silakan coba lagi nanti. (Error: {last_error})"
     except Exception as e:
         return f"Terjadi kesalahan pada sistem AI: {str(e)}"
 
