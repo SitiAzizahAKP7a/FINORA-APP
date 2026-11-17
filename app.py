@@ -9,7 +9,10 @@ import hashlib
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
-import google.generativeai as genai
+
+# Menggunakan SDK Gemini Terbaru
+from google import genai
+from google.genai import types
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -101,7 +104,7 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (GEMINI)
+# AI ENGINE (GEMINI TERBARU)
 # ============================================================
 def ask_gemini(prompt, audit_context):
     try:
@@ -109,8 +112,8 @@ def ask_gemini(prompt, audit_context):
         if not api_key:
             return "⚠️ API Key Gemini belum diatur. Silakan tambahkan `GEMINI_API_KEY` di menu Secrets Streamlit."
         
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        # Menggunakan SDK google-genai terbaru
+        client = genai.Client(api_key=api_key)
         
         full_prompt = f"""
         Kamu adalah FINORA AI, seorang Asisten Auditor Profesional.
@@ -124,7 +127,16 @@ def ask_gemini(prompt, audit_context):
         [PERTANYAAN AUDITOR]
         {prompt}
         """
-        response = model.generate_content(full_prompt)
+        
+        # Memanggil model gemini-3.8-flash sesuai instruksi error
+        response = client.models.generate_content(
+            model='gemini-3.8-flash',
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                max_output_tokens=2048,
+            )
+        )
         return response.text
     except Exception as e:
         return f"Terjadi kesalahan saat menghubungi AI: {str(e)}"
@@ -469,7 +481,6 @@ def render_audit_results(all_findings, flagged_data, filename, entitas, periode,
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # MENGGUNAKAN FORM AGAR TIDAK REFRESH SAAT DIKETIK
         with st.form(key="ai_chat_form", clear_on_submit=True):
             prompt = st.text_input("Tulis pertanyaan Anda di sini...")
             submit_button = st.form_submit_button(label="Kirim ke AI", use_container_width=True)
