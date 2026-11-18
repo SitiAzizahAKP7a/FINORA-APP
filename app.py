@@ -155,7 +155,7 @@ def fetch_findings(aid):
     conn.close(); return df
 
 # ============================================================
-# AI ENGINE (SUDAH DIPERBAIKI)
+# AI ENGINE
 # ============================================================
 def get_gemini_client():
     try:
